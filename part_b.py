@@ -1,25 +1,27 @@
 #!/usr/bin/env python3
-"""Part (b): Ridge regression with five-fold cross-validation to select lambda.
-
-Usage:
-    python3 part_b.py train.csv test.csv folds.txt regularization.txt \
-        predictions.txt weights.txt bestlambda.txt crossvalidation_errors.txt
-"""
+import re
 import sys
 
 import numpy as np
 import pandas as pd
 
+TARGET = "hr"
 
-def load_features(path, has_target):
+
+def load_train(path):
     df = pd.read_csv(path)
-    if has_target:
-        y = df.iloc[:, -1].to_numpy(dtype=np.float64)
-        X = df.iloc[:, :-1].to_numpy(dtype=np.float64)
-    else:
-        y = None
-        X = df.to_numpy(dtype=np.float64)
+    if TARGET not in df.columns:
+        raise ValueError(f"{path} is missing the '{TARGET}' target column")
+    y = df[TARGET].to_numpy(dtype=np.float64)
+    X = df.drop(columns=[TARGET]).to_numpy(dtype=np.float64)
     return X, y
+
+
+def load_test(path):
+    df = pd.read_csv(path)
+    if TARGET in df.columns:
+        df = df.drop(columns=[TARGET])
+    return df.to_numpy(dtype=np.float64)
 
 
 def augment(X):
@@ -27,24 +29,23 @@ def augment(X):
     return np.hstack([np.ones((n, 1), dtype=np.float64), X])
 
 
-def read_folds(path):
-    """folds.txt contains the ending index for each fold, one per line.
+def read_folds(path, n):
+    """folds.txt gives the (exclusive) ending row index of each fold.
 
-    NOTE: this assumes folds are contiguous, non-overlapping blocks of
-    0-indexed row positions (inclusive end index) that partition the
-    training rows in the order given. Cross-check this against the
-    reference folds.txt once it is available, and adjust if the actual
-    format differs (e.g. exclusive end, or explicit index lists).
+    Accepts either one integer per line, or the reference format
+    `fold_ends = [32161, 64993, 97079, 127934, 158986]` (all integers in
+    the file are extracted regardless of surrounding syntax). Fold k
+    covers rows [ends[k-1], ends[k]); the folds must partition all n
+    training rows in order, i.e. the last end must equal n.
     """
     with open(path) as f:
-        ends = [int(line.strip()) for line in f if line.strip()]
-
-    folds = []
-    start = 0
-    for end in ends:
-        folds.append(np.arange(start, end + 1))
-        start = end + 1
-    return folds
+        text = f.read()
+    ends = [int(tok) for tok in re.findall(r"-?\d+", text)]
+    if not ends or ends[-1] != n:
+        raise ValueError(
+            f"{path}: fold ends {ends} do not partition {n} training rows"
+        )
+    return list(zip([0] + ends[:-1], ends))
 
 
 def read_lambdas(path):
@@ -52,12 +53,22 @@ def read_lambdas(path):
         return [float(line.strip()) for line in f if line.strip()]
 
 
-def ridge_weights(X_aug, y, lam):
+def fold_normal_equations(X_aug, y, bounds):
+    """Per-fold Gram matrix X_k^T X_k and X_k^T y_k, one pass over the data.
+
+    Excluding fold k from training just means summing the OTHER folds'
+    precomputed (G, b) pairs -- an O(m^2) addition -- instead of gathering
+    and re-multiplying an (n_train x m) matrix from scratch for every
+    lambda/fold combination.
+    """
     m1 = X_aug.shape[1]
-    R = np.eye(m1)
-    R[0, 0] = 0.0
-    A = X_aug.T @ X_aug + lam * R
-    return np.linalg.inv(A) @ (X_aug.T @ y)
+    G, b = [], []
+    for start, end in bounds:
+        X_k = X_aug[start:end]
+        y_k = y[start:end]
+        G.append(X_k.T @ X_k)
+        b.append(X_k.T @ y_k)
+    return G, b
 
 
 def nmse(y_true, y_pred):
@@ -86,32 +97,39 @@ def main():
         cverrors_path,
     ) = sys.argv[1:9]
 
-    X_train, y_train = load_features(train_path, has_target=True)
-    X_test, _ = load_features(test_path, has_target=False)
+    X_train, y_train = load_train(train_path)
+    n, m1 = X_train.shape[0], X_train.shape[1] + 1
+    X_aug = augment(X_train)
+    del X_train
 
-    folds = read_folds(folds_path)
+    bounds = read_folds(folds_path, n)
     lambdas = read_lambdas(reg_path)
 
-    X_aug_full = augment(X_train)
+    G, b = fold_normal_equations(X_aug, y_train, bounds)
+    G_total = sum(G)
+    b_total = sum(b)
+
+    R = np.eye(m1, dtype=np.float64)
+    R[0, 0] = 0.0
 
     cv_errors = []
     for lam in lambdas:
         fold_nmses = []
-        for k in range(len(folds)):
-            val_idx = folds[k]
-            train_idx = np.concatenate([folds[j] for j in range(len(folds)) if j != k])
-
-            W = ridge_weights(X_aug_full[train_idx], y_train[train_idx], lam)
-            y_pred = X_aug_full[val_idx] @ W
-            fold_nmses.append(nmse(y_train[val_idx], y_pred))
-
+        for k, (start, end) in enumerate(bounds):
+            A = (G_total - G[k]) + lam * R
+            rhs = b_total - b[k]
+            W = np.linalg.inv(A) @ rhs
+            y_pred = X_aug[start:end] @ W
+            fold_nmses.append(nmse(y_train[start:end], y_pred))
         cv_errors.append(float(np.mean(fold_nmses)))
 
     best_idx = int(np.argmin(cv_errors))  # first occurrence on ties
     best_lambda = lambdas[best_idx]
 
-    W_final = ridge_weights(X_aug_full, y_train, best_lambda)
+    W_final = np.linalg.inv(G_total + best_lambda * R) @ b_total
 
+    del X_aug, y_train
+    X_test = load_test(test_path)
     X_test_aug = augment(X_test)
     preds = X_test_aug @ W_final
 
