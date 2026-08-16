@@ -20,8 +20,9 @@ jobs:
         env:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
         run: |
-          mkdir -p ~/.config/kaggle
-          echo "$KAGGLE_API_TOKEN" > ~/.config/kaggle/access_token
+          mkdir -p ~/.kaggle
+          echo "$KAGGLE_API_TOKEN" > ~/.kaggle/access_token
+          chmod 600 ~/.kaggle/access_token
 
       - name: Update Kaggle dataset
         run: |
