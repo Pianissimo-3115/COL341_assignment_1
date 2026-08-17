@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+
+
+# TODO: replace np.savetxt(...,fmt="%.10f") with np.savetxt)
 import re
 import sys
 

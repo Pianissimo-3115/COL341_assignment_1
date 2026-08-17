@@ -14,7 +14,7 @@ import sys
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import RidgeCV
+from sklearn.linear_model import ElasticNetCV
 from sklearn.preprocessing import StandardScaler
 
 N_BLOCKS = 10
@@ -161,7 +161,13 @@ def main():
     Z_train_s = scaler.fit_transform(Z_train)
     Z_test_s = scaler.transform(Z_test)
 
-    model = RidgeCV(alphas=np.logspace(-3, 3, 13), cv=5)
+    model = ElasticNetCV(
+        l1_ratio=[0.1, 0.3, 0.5, 0.7, 0.9, 0.95, 0.99, 1.0],
+        alphas=np.logspace(-2, 2, 50),
+        cv=5,
+        max_iter=10000,
+        random_state=0,
+    )
     model.fit(Z_train_s, y_train)
 
     preds = model.predict(Z_test_s)

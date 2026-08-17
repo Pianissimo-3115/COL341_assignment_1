@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+
+
+# TODO: replace np.savetxt(...,fmt="%.10f") with np.savetxt)
 """Part (a): Closed-form ordinary least-squares linear regression.
 
 Usage:
