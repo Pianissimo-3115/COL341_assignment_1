@@ -9,10 +9,6 @@ Library rules (per assignment statement):
   - scikit-learn: only for scaling/preprocessing, CV/hyperparameter
     selection, feature selection, and fitting the final permitted
     linear model (OLS / ridge / lasso / elastic net).
-
-This is a starter feature set (per-modality statistical summaries).
-Extend build_features() with more informative features (autocorrelation,
-polynomial terms, cross-axis interactions, etc.) to improve ranking.
 """
 import sys
 
@@ -27,16 +23,27 @@ BVP_LEN = 64
 EDA_LEN = 4
 BLOCK_LEN = 3 * ACC_LEN + BVP_LEN + EDA_LEN  # 164, matches assignment column order
 
+BVP_FS = 64.0
+HR_MIN_BPM = 40.0
+HR_MAX_BPM = 200.0
 
-def load_raw(path, has_target):
+TARGET = "hr"
+
+
+def load_train(path):
     df = pd.read_csv(path)
-    if has_target:
-        y = df.iloc[:, -1].to_numpy(dtype=np.float64)
-        X = df.iloc[:, :-1].to_numpy(dtype=np.float64)
-    else:
-        y = None
-        X = df.to_numpy(dtype=np.float64)
+    if TARGET not in df.columns:
+        raise ValueError(f"{path} is missing the '{TARGET}' target column")
+    y = df[TARGET].to_numpy(dtype=np.float64)
+    X = df.drop(columns=[TARGET]).to_numpy(dtype=np.float64)
     return X, y
+
+
+def load_test(path):
+    df = pd.read_csv(path)
+    if TARGET in df.columns:
+        df = df.drop(columns=[TARGET])
+    return df.to_numpy(dtype=np.float64)
 
 
 def split_signals(X):
@@ -93,6 +100,35 @@ def signal_stats(arr, prefix):
     return feats, names
 
 
+def autocorr_features(arr, fs, hr_min, hr_max, prefix):
+    """Banked-lag autocorrelation: correlate each row with time-shifted
+    copies of itself over the lag range implied by [hr_min, hr_max] bpm,
+    and take the best-matching lag as an implied heart rate. This is the
+    time-domain equivalent of picking the dominant frequency -- no FFT
+    involved, just a sum-of-products per candidate lag.
+    """
+    n, T = arr.shape
+    lag_min = max(1, int(np.floor(60.0 * fs / hr_max)))
+    lag_max = min(T - 1, int(np.ceil(60.0 * fs / hr_min)))
+
+    centered = arr - arr.mean(axis=1, keepdims=True)
+    zero_lag_energy = np.sum(centered ** 2, axis=1) + 1e-8
+
+    best_corr = np.full(n, -np.inf, dtype=np.float64)
+    best_lag = np.ones(n, dtype=np.float64)
+    for lag in range(lag_min, lag_max + 1):
+        corr = np.sum(centered[:, :-lag] * centered[:, lag:], axis=1) / zero_lag_energy
+        improved = corr > best_corr
+        best_corr = np.where(improved, corr, best_corr)
+        best_lag = np.where(improved, lag, best_lag)
+
+    implied_bpm = 60.0 * fs / best_lag
+
+    feats = np.stack([implied_bpm, best_corr], axis=1)
+    names = [f"{prefix}_autocorr_bpm", f"{prefix}_autocorr_peak"]
+    return feats, names
+
+
 def build_features(X):
     signals = split_signals(X)
     blocks, names = [], []
@@ -100,6 +136,11 @@ def build_features(X):
         f, n = signal_stats(arr, name)
         blocks.append(f)
         names.extend(n)
+
+    f, n = autocorr_features(signals["bvp"], BVP_FS, HR_MIN_BPM, HR_MAX_BPM, "bvp")
+    blocks.append(f)
+    names.extend(n)
+
     return np.hstack(blocks), names
 
 
@@ -110,8 +151,8 @@ def main():
 
     train_path, test_path, predictions_path = sys.argv[1:4]
 
-    X_train_raw, y_train = load_raw(train_path, has_target=True)
-    X_test_raw, _ = load_raw(test_path, has_target=False)
+    X_train_raw, y_train = load_train(train_path)
+    X_test_raw = load_test(test_path)
 
     Z_train, _ = build_features(X_train_raw)
     Z_test, _ = build_features(X_test_raw)

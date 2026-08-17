@@ -1,2 +1,3 @@
 *.csv
 tc1/
+__pycache__/
