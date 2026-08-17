@@ -1,3 +1,7 @@
 *.csv
 tc1/
 __pycache__/
+synthd/
+*.npy
+model_d*.pkl
+m_d*.pkl
