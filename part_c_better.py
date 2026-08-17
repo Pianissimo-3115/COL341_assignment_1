@@ -197,7 +197,7 @@ def main():
 
     model = ElasticNetCV(
         l1_ratio=[0.1, 0.3, 0.5, 0.7, 0.9, 0.95, 0.99, 1.0],
-        alphas=50,
+        alphas=np.logspace(-2, 2, 50),
         cv=5,
         max_iter=10000,
         random_state=0,
