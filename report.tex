@@ -6,6 +6,7 @@
 \usepackage{booktabs}
 \usepackage{amsmath}
 \usepackage[T1]{fontenc}
+\usepackage{graphicx}
 
 \setlength{\parskip}{2pt}
 \setlength{\parindent}{0pt}
@@ -114,7 +115,97 @@ $0.6557$ for scalars alone, $0.6420$ for scalars\,+\,splines and $0.6420$ for al
 blocks: the two extra blocks earned nothing beyond the spline expansion, so they were
 removed, cutting the design by 61\% and the fit time roughly tenfold at no measured cost.
 
-% TODO Part (d) feature description goes here.
+ Section "1. Created features", replacing the line
+%   % TODO Part (d) feature description goes here.
+% ----------------------------------------------------------------------
+
+\textbf{Part (d) --- CGM glucose estimation.}
+Glucose cannot be read off any single sample of a five-minute window; what a
+wearable can see is the autonomic and vascular state that accompanies a glucose
+level. Every feature family is therefore a summary of one physiological
+mechanism, computed independently for each window from that window's own
+samples only, so no transformation is ever fitted on test data. Missing samples
+(\texttt{NaN}, the E4 leaving the wrist) are tolerated by every extractor, and
+each family carries an explicit \feat{*\_valid}/\feat{*\_miss} indicator, since
+missingness is itself informative.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lrll@{}}
+\toprule
+\textbf{Family} & \textbf{Count} & \textbf{Modality} & \textbf{Content} \\
+\midrule
+HRV + beat template & 78 & ECG (Zephyr, 250\,Hz) &
+  In-house Pan--Tompkins R-peaks; 24 HRV features (mean/median \\
+ & & & RR, SDNN, RMSSD, pNN50/20, CVNN, Poincar\'e $SD1$/$SD2$, \\
+ & & & VLF/LF/HF/LF:HF by explicit tachogram DFT); a 32-point \\
+ & & & ensemble beat with T-wave amplitude, latency, area and \\
+ & & & spread (repolarisation tracks glycaemia); 16 raw stats. \\
+\addlinespace
+PRV + pulse morphology & 82 & BVP (E4, 64\,Hz) &
+  The same 24 rate-variability features from PPG pulse peaks; a \\
+ & & & 24-point pulse template (vascular tone); $0.7$--$8$\,Hz band \\
+ & & & powers, centroid, entropy; 16 raw-waveform stats. \\
+\addlinespace
+Activity context & 76 & Accelerometer (E4 &
+  Squared-magnitude stats, ENMO, high-passed motion energy, \\
+ & & 32\,Hz, Zephyr 100\,Hz) & stillness, jerk, per-axis posture, $0.1$--$8$\,Hz band powers. \\
+ & & & Exercise moves glucose, and motion is the dominant PPG \\
+ & & & artefact, so these also gate trust in the cardiac families. \\
+\addlinespace
+Respiration & 32 & Breathing (25\,Hz) &
+  Distribution stats; $0.08$--$0.6$\,Hz band powers, centroid, peak \\
+ & & & frequency; breath-to-breath rate and its variability. \\
+\addlinespace
+Electrodermal & 24 & EDA (4\,Hz) &
+  Level, range, slope, drift; 20\,s tonic/phasic split, phasic \\
+ & & & amplitude and SCR count --- sympathetic arousal. \\
+\addlinespace
+Skin temperature & 17 & TEMP (4\,Hz) &
+  Level, quantiles, slope, last-minus-first-minute drift. \\
+\addlinespace
+Device heart rate & 19 & E4 HR (1\,Hz) &
+  Level, spread, quantiles, successive difference, 5-min drift. \\
+\addlinespace
+Pulse arrival time & 6 & ECG $+$ BVP &
+  Median/sd/IQR of the R-peak-to-pulse-foot delay, its valid \\
+ & & & fraction, ECG-minus-PPG rate disagreement: an arterial \\
+ & & & stiffness proxy needing both the chest and wrist device. \\
+\addlinespace
+Derived context & 9 & Combinations &
+  Unit-free ratios that transfer across people: RMSSD$\times$HR, \\
+ & & & SDNN/RR, PPG:ECG rate, wrist:chest motion, respiration:HR, \\
+ & & & and a sleep-likeness score. \\
+\midrule
+\textbf{Final design} & \textbf{343} & & Well under the 500-feature limit, so the \\
+ & & & correlation filter (cap 480) is inactive. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Final linear model.} Columns are median-imputed, winsorised at the
+training $0.5/99.5$ percentiles, constant columns dropped, and standardised ---
+all statistics from the training directory only and stored in the pickle.
+Ridge regression is fitted over $\alpha\in\{10^{-1},10^{-0.5},\dots,10^{5}\}$,
+one eigendecomposition giving the whole path, and $\alpha$ is chosen by the
+validation scheme that mirrors the protocol being graded: shuffled 5-fold for
+d1, a per-subject latest-25\% temporal cut for d2, and leave-one-subject-out for
+d3. Because the graded metric is NMAE, the $L_2$ solution is then refit by four
+IRLS reweightings towards an $L_1$ objective, which targets the conditional
+median. For d3 a within-subject-centred variant is also evaluated (features
+centred per training subject, so the fit learns within-person relationships
+rather than per-person levels); the centring offset is folded back into the
+intercept, so the stored model is in every case exactly
+\[
+  \hat{y} = w_0 + \mathbf{w}^{\!\top}\mathbf{z},
+\]
+one intercept and one coefficient vector on the untouched feature scale, in
+mg/dL. \feat{subject\_id} and \feat{timestamp} are used only to construct these
+validation splits and are dropped before the design matrix is formed; they are
+never predictive features.
+
+
+% ----------------------------------------------------------------------
 
 %======================================================================
 \section*{2.\quad Normalised acceleration}
@@ -126,10 +217,52 @@ $a_{\mathrm{sq}}(t)=a_x(t)^2+a_y(t)^2+a_z(t)^2$, normalised by its temporal mean
        {\frac{1}{T}\sum_{\tau=1}^{T} a_{\mathrm{sq}}(\tau)} .
 \]
 
-% TODO figure: representative Part (a) window -- 10 s BVP waveform, normalised squared
-% acceleration magnitude, 40 EDA samples, and the heart-rate target. All axes labelled
-% with units (s, bpm, uS, device units).
-% TODO figure: representative Part (d) five-minute window.
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.86\textwidth]{part_a_window.pdf}
+\caption{Representative Part~(a) example. Top: the ten-second BVP waveform
+(device units, 64\,Hz). Middle: normalised squared acceleration magnitude
+$\tilde{a}_{\mathrm{sq}}(t)$ (dimensionless, 32\,Hz), with the dotted line at its
+mean of $1$. Bottom: the 40 EDA samples ($\mu$S, 4\,Hz). The heart-rate target for
+this window is stated in the panel title.}
+\end{figure}
+
+ Section "2. Normalised acceleration", replacing the line
+%   % TODO figure: representative Part (d) five-minute window.
+% ----------------------------------------------------------------------
+%
+% DATA NEEDED (one window index i of one training file, e.g. train_d1/<f>.npz):
+%   e4_bvp[i]     19200 samples @ 64 Hz    -> panel 1, x in s (0-300), y in device units
+%   e4_acc[i]     9600 x 3   @ 32 Hz       -> panel 2, a_sq = ax^2+ay^2+az^2 divided
+%                                             by its own temporal mean (dimensionless)
+%   e4_eda[i]     1200 samples @ 4 Hz      -> panel 3, y in microsiemens
+%   zephyr_ecg[i] 75000 samples @ 250 Hz   -> panel 4, y in mV
+%   e4_hr[i]      300 samples @ 1 Hz       -> panel 5, y in bpm
+%   glucose[i]    scalar, mg/dL            -> quoted in the caption / panel-5 title
+%   subject_id[i], timestamp[i]            -> caption only (visualization is permitted)
+% Pick i with all six arrays fully finite:
+%   np.isfinite(a).all(axis=tuple(range(1, a.ndim))) for each modality, then i =
+%   the first index where every mask is True.  Share the x axis (0-300 s) across
+%   all five panels; label every axis with its unit.
+% Produced by (Kaggle, ~1 min, no model needed):
+%   python3 plot_window_d.py train_d1/<file>.npz fig_d_window.pdf
+%
+% \begin{figure}[h]
+% \centering
+% \includegraphics[width=\textwidth]{fig_d_window.pdf}
+% \caption{Representative Part~(d) five-minute window (subject TODO, CGM target
+% TODO\,mg/dL). Top to bottom, all against the same time axis $t\in[0,300)$\,s
+% ending at the CGM reading: E4 BVP waveform (64\,Hz, device units); normalised
+% squared acceleration magnitude
+% $\tilde{a}_{\mathrm{sq}}(t)=a_{\mathrm{sq}}(t)/\overline{a_{\mathrm{sq}}}$ from
+% the E4 accelerometer (32\,Hz, dimensionless, so $1.0$ is the window mean);
+% E4 EDA (4\,Hz, $\mu$S); Zephyr ECG (250\,Hz, mV); and the E4 heart-rate stream
+% (1\,Hz, bpm).}
+% \label{fig:dwindow}
+% \end{figure}
+
+
+% ----------------------------------------------------------------------
 
 %======================================================================
 \section*{3.\quad Top five features}
@@ -156,7 +289,62 @@ harmonic probes, and a surface tag (\feat{S}, \feat{P}, \feat{AR}, \feat{G2}, \f
 \end{tabular}
 \end{table}
 % TODO fill from: python3 part_c_report.py train.csv report_c.txt
-% TODO Part (d) top-five table.
+ Section "3. Top five features", after the Part (c) table,
+% replacing the line   % TODO Part (d) top-five table.
+% ----------------------------------------------------------------------
+
+\textbf{Part (d).} The stored coefficients act on the raw (winsorised) feature
+scale, so importance is $|w_j|\,\sigma_j$ with $\sigma_j$ the training standard
+deviation of feature $j$ --- the coefficient the model would have had if the
+columns were standardised. The ranking below is for the temporal
+within-subject protocol (d2); names carry their modality as a prefix:
+\feat{ecg\_} ECG, \feat{ppg\_}/\feat{bvp\_} BVP, \feat{eda\_} EDA,
+\feat{temp\_} skin temperature, \feat{e4hr\_} device heart rate,
+\feat{resp\_} respiration, \feat{e4acc\_}/\feat{zacc\_} accelerometer,
+\feat{pat\_} pulse arrival time, \feat{ctx\_} derived combinations.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}rllrl@{}}
+\toprule
+\# & \textbf{Feature} & \textbf{Modality} & $|w_{\text{std}}|$ & \textbf{Why it may be relevant} \\
+\midrule
+1 & TODO & TODO & TODO & TODO \\
+2 & TODO & TODO & TODO & TODO \\
+3 & TODO & TODO & TODO & TODO \\
+4 & TODO & TODO & TODO & TODO \\
+5 & TODO & TODO & TODO & TODO \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% HOW TO FILL THIS TABLE
+% ----------------------
+% part_d.py does NOT currently save the per-feature standard deviations: the
+% pickle's preprocessing_state holds only {median, lo, hi, keep, select,
+% names_in, names_out, cv_nmae, alpha, centred}.  prep["mu"] and prep["sd"] are
+% computed in fit_preprocess (part_d.py:711-712) but dropped when the state dict
+% is assembled (part_d.py:907-919), so |w_std| cannot be recovered from
+% model_d2.pkl alone.  Note also that eval_d.py --top-features ranks by the RAW
+% |coef|, which is NOT the standardized importance the report item asks for.
+%
+% Option A (no extra 15-minute run; one-line change to part_d.py) -- add to the
+% preprocessing_state dict:      "mu": prep["mu"][sel], "sd": prep["sd"][sel],
+% then, after any train run:
+%   python3 -c "import pickle,numpy as np; s=pickle.load(open('model_d2.pkl','rb'));
+%   sd=s['preprocessing_state']['sd']; imp=np.abs(s['coef'])*sd;
+%   [print('%-24s %.4f'%(s['feature_names'][i],imp[i])) for i in np.argsort(-imp)[:5]]"
+%
+% Option B (no code change; costs one extra feature_engineering pass over the
+% training directory, ~15 min) -- regenerate the exact training design matrix
+% and take its column sds:
+%   python3 part_d.py feature_engineering d2 train_d2/ model_d2.pkl feats_train_d2.npy
+%   python3 -c "import pickle,numpy as np; s=pickle.load(open('model_d2.pkl','rb'));
+%   Z=np.load('feats_train_d2.npy'); imp=np.abs(s['coef'])*Z.std(0);
+%   [print('%-24s %.4f'%(s['feature_names'][i],imp[i])) for i in np.argsort(-imp)[:5]]"
+
+
+% ----------------------------------------------------------------------
 
 %======================================================================
 \section*{4.\quad Comparison with the median baseline}
@@ -178,7 +366,58 @@ Median of training targets      & TODO & TODO \\
 \bottomrule
 \end{tabular}
 \end{table}
-% TODO fill from part_c_report.py; Part (d) needs the same table reported separately
-% for the random within-subject, temporal within-subject and cross-subject protocols.
+ Section "4. Comparison with the median baseline", after the
+% Part (c) table, replacing the two-line TODO comment there.
+% ----------------------------------------------------------------------
+
+\textbf{Part (d).} The baseline predicts the median of the training glucose
+values for every example. Both predictors are scored on the same local
+validation examples, and each protocol is scored under its own splitting rule,
+built from the corresponding training folder only: shuffled 5-fold for d1, the
+latest 25\% of each subject's windows for d2, and held-out subjects for d3.
+Both metrics are normalised so that predicting the validation mean scores $1.0$.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}llrr@{}}
+\toprule
+\textbf{Validation setting} & \textbf{Predictor} & \textbf{NMAE} & \textbf{NMSE} \\
+\midrule
+Random within-subject (d1)   & Part (d) model            & TODO & TODO \\
+                             & Median of training targets & TODO & TODO \\
+\addlinespace
+Temporal within-subject (d2) & Part (d) model            & TODO & TODO \\
+                             & Median of training targets & TODO & TODO \\
+\addlinespace
+Cross-subject (d3)           & Part (d) model            & TODO & TODO \\
+                             & Median of training targets & TODO & TODO \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The gap between d1 and d3 is the point of the comparison: a random
+within-subject split lets the model recognise the participant and read off a
+persistent per-person glucose level, which a genuinely unseen participant does
+not provide.
+
+% HOW TO FILL THIS TABLE (per protocol P in d1, d2, d3; each row pair is one
+% train run plus one feature_engineering run, ~15 min each on Kaggle):
+%   python3 part_d.py train P train_P/ model_P.pkl
+%   python3 part_d.py feature_engineering P <labelled public_test dir> model_P.pkl features_P.npy
+%   python3 eval_d.py --model model_P.pkl --features features_P.npy --labels <same dir>
+%       -> prints NMSE and NMAE for the model row.
+% Median-baseline row, against the same labels:
+%   python3 -c "import glob,numpy as np;
+%   tr=np.concatenate([np.load(p)['glucose'] for p in sorted(glob.glob('train_P/*.npz'))]);
+%   y=np.concatenate([np.load(p)['glucose'] for p in sorted(glob.glob('<test dir>/*.npz'))]);
+%   m=np.median(tr[np.isfinite(tr)]);
+%   print('NMAE %.4f'%(np.abs(y-m).sum()/np.abs(y-y.mean()).sum()),
+%         'NMSE %.4f'%(((y-m)**2).sum()/((y-y.mean())**2).sum()))"
+% If the labelled public_test directories are unavailable, the model NMAE for
+% each protocol is already stored by the train run as
+% preprocessing_state["cv_nmae"] (the mean NMAE over that protocol's own
+% validation splits); NMSE and the baseline are not computed anywhere in
+% part_d.py and still need the snippet above, run on the held-out indices that
+% make_splits(protocol, ...) returns.
 
 \end{document}
