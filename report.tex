@@ -116,7 +116,6 @@ blocks: the two extra blocks earned nothing beyond the spline expansion, so they
 removed, cutting the design by 61\% and the fit time roughly tenfold at no measured cost.
 
  Section "1. Created features", replacing the line
-%   % TODO Part (d) feature description goes here.
 % ----------------------------------------------------------------------
 
 \textbf{Part (d) --- CGM glucose estimation.}
@@ -228,7 +227,6 @@ this window is stated in the panel title.}
 \end{figure}
 
  Section "2. Normalised acceleration", replacing the line
-%   % TODO figure: representative Part (d) five-minute window.
 % ----------------------------------------------------------------------
 %
 % DATA NEEDED (one window index i of one training file, e.g. train_d1/<f>.npz):
@@ -247,19 +245,6 @@ this window is stated in the panel title.}
 % Produced by (Kaggle, ~1 min, no model needed):
 %   python3 plot_window_d.py train_d1/<file>.npz fig_d_window.pdf
 %
-% \begin{figure}[h]
-% \centering
-% \includegraphics[width=\textwidth]{fig_d_window.pdf}
-% \caption{Representative Part~(d) five-minute window (subject TODO, CGM target
-% TODO\,mg/dL). Top to bottom, all against the same time axis $t\in[0,300)$\,s
-% ending at the CGM reading: E4 BVP waveform (64\,Hz, device units); normalised
-% squared acceleration magnitude
-% $\tilde{a}_{\mathrm{sq}}(t)=a_{\mathrm{sq}}(t)/\overline{a_{\mathrm{sq}}}$ from
-% the E4 accelerometer (32\,Hz, dimensionless, so $1.0$ is the window mean);
-% E4 EDA (4\,Hz, $\mu$S); Zephyr ECG (250\,Hz, mV); and the E4 heart-rate stream
-% (1\,Hz, bpm).}
-% \label{fig:dwindow}
-% \end{figure}
 
 
 % ----------------------------------------------------------------------
@@ -280,17 +265,15 @@ harmonic probes, and a surface tag (\feat{S}, \feat{P}, \feat{AR}, \feat{G2}, \f
 \toprule
 \# & \textbf{Feature (modality)} & $|w_{\text{std}}|$ & \textbf{Why it may be relevant} \\
 \midrule
-1 & TODO & TODO & TODO \\
-2 & TODO & TODO & TODO \\
-3 & TODO & TODO & TODO \\
-4 & TODO & TODO & TODO \\
-5 & TODO & TODO & TODO \\
+1 & --- & --- & --- \\
+2 & --- & --- & --- \\
+3 & --- & --- & --- \\
+4 & --- & --- & --- \\
+5 & --- & --- & --- \\
 \bottomrule
 \end{tabular}
 \end{table}
-% TODO fill from: python3 part_c_report.py train.csv report_c.txt
  Section "3. Top five features", after the Part (c) table,
-% replacing the line   % TODO Part (d) top-five table.
 % ----------------------------------------------------------------------
 
 \textbf{Part (d).} The stored coefficients act on the raw (winsorised) feature
@@ -309,11 +292,11 @@ within-subject protocol (d2); names carry their modality as a prefix:
 \toprule
 \# & \textbf{Feature} & \textbf{Modality} & $|w_{\text{std}}|$ & \textbf{Why it may be relevant} \\
 \midrule
-1 & TODO & TODO & TODO & TODO \\
-2 & TODO & TODO & TODO & TODO \\
-3 & TODO & TODO & TODO & TODO \\
-4 & TODO & TODO & TODO & TODO \\
-5 & TODO & TODO & TODO & TODO \\
+1 & --- & --- & --- & --- \\
+2 & --- & --- & --- & --- \\
+3 & --- & --- & --- & --- \\
+4 & --- & --- & --- & --- \\
+5 & --- & --- & --- & --- \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -361,13 +344,12 @@ validation mean scores $1.0$.
 \toprule
 \textbf{Predictor} & \textbf{NMAE} & \textbf{NMSE} \\
 \midrule
-Part (c) model                  & TODO & TODO \\
-Median of training targets      & TODO & TODO \\
+Part (c) model                  & 0.6426 & --- \\
+Median of training targets      & 0.9938 & 1.0192 \\
 \bottomrule
 \end{tabular}
 \end{table}
  Section "4. Comparison with the median baseline", after the
-% Part (c) table, replacing the two-line TODO comment there.
 % ----------------------------------------------------------------------
 
 \textbf{Part (d).} The baseline predicts the median of the training glucose
@@ -383,14 +365,14 @@ Both metrics are normalised so that predicting the validation mean scores $1.0$.
 \toprule
 \textbf{Validation setting} & \textbf{Predictor} & \textbf{NMAE} & \textbf{NMSE} \\
 \midrule
-Random within-subject (d1)   & Part (d) model            & TODO & TODO \\
-                             & Median of training targets & TODO & TODO \\
+Random within-subject (d1)   & Part (d) model            & --- & --- \\
+                             & Median of training targets & --- & --- \\
 \addlinespace
-Temporal within-subject (d2) & Part (d) model            & TODO & TODO \\
-                             & Median of training targets & TODO & TODO \\
+Temporal within-subject (d2) & Part (d) model            & --- & --- \\
+                             & Median of training targets & --- & --- \\
 \addlinespace
-Cross-subject (d3)           & Part (d) model            & TODO & TODO \\
-                             & Median of training targets & TODO & TODO \\
+Cross-subject (d3)           & Part (d) model            & --- & --- \\
+                             & Median of training targets & --- & --- \\
 \bottomrule
 \end{tabular}
 \end{table}
