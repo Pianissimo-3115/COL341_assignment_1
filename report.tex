@@ -1,0 +1,184 @@
+% COL774 Assignment 1.1 -- report
+% Compile: pdflatex report.tex    (packages: geometry, booktabs, amsmath)
+% Limit: 3 pages total, covering Parts (a)/(c)/(d) report items.
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=2cm]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage[T1]{fontenc}
+
+\setlength{\parskip}{2pt}
+\setlength{\parindent}{0pt}
+\newcommand{\feat}[1]{\texttt{\small #1}}
+\pagestyle{empty}
+
+\begin{document}
+
+\begin{center}
+  {\Large\bfseries COL774 Assignment 1.1 --- Report}\\[2pt]
+  {\small Entry number: 2024CSXXXXX}
+\end{center}
+\vspace{-4pt}
+\hrule
+\vspace{8pt}
+
+%======================================================================
+\section*{1.\quad Created features}
+
+\textbf{Part (c) --- heart-rate prediction.}
+The target is the heart rate the Empatica E4 derives from its BVP waveform, so the
+informative quantity in a window is not any individual sample but the \emph{repetition
+rate} of the pulse. Every feature exists either to estimate that rate or to indicate how
+far the estimate should be trusted.
+
+Each window is band-passed (difference of two cumulative-sum moving averages,
+$\approx 0.5$--$4$\,Hz) and then scored against every candidate rate on a grid of 360
+values spanning $36$--$216$\,bpm in $0.5$\,bpm steps, giving a score-versus-rate curve.
+Ten such curves (``evidence surfaces'') are computed by deliberately different methods,
+because each fails differently: the Hann-windowed periodogram (\feat{P}); an order-32
+Yule--Walker autoregressive spectrum (\feat{AR}), which gives far sharper peaks on a
+10\,s window; the geometric mean of sub-window periodograms at $2$\,s, $2.5$\,s and
+$5$\,s scales (\feat{G2}, \feat{G25}, \feat{G5}), where a rate scores well only if
+present throughout the window, suppressing transient motion; a band-limited
+autocorrelation evaluated at each candidate period (\feat{R}); the accelerometer
+spectrum (\feat{AC}), whose peak at the same rate marks a motion artefact; and three
+fixed-weight combinations of these with harmonic look-ups at $2f$, $3f$, $f/2$, $f/3$,
+spectral whitening and a smoothed population rate prior estimated from the training
+targets (\feat{S}, \feat{S2}, \feat{S3}). All spectral transforms are explicit
+Hann-windowed cosine/sine projections evaluated directly on the bpm grid, since
+\texttt{numpy.fft} is not permitted for this part; only NumPy and pandas are used.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lrll@{}}
+\toprule
+\textbf{Family} & \textbf{Count} & \textbf{Modality} & \textbf{Content} \\
+\midrule
+Surface descriptors & 140 & BVP (\feat{AC}: accel.) &
+  Peak rate with sub-bin parabolic refinement; 2nd/3rd peaks with \\
+(10 surfaces $\times$ 14) & & &
+  score margins and bpm offsets (a $\approx\!2\times$ offset flags a \\
+ & & & harmonic); softmax centroid, median, quartiles, IQR, \\
+ & & & entropy and spread of the curve read as a distribution. \\
+\addlinespace
+Cross-estimator & 11 & BVP + accel. &
+  Spread/median/mean of the nine rate estimates; each \\
+agreement & & & estimator's deviation from the selected rate; fraction \\
+ & & & agreeing within 4\,bpm; BVP envelope vs.\ motion corr. \\
+\addlinespace
+Harmonic probes & 8 & BVP &
+  Surface value at $1\times$, $2\times$, $\tfrac12\times$, $3\times$ the selected rate, on \\
+ & & & the periodogram and the 2\,s consensus. \\
+\addlinespace
+BVP time domain & 14 & BVP &
+  Zero-crossing rate at two bandwidths; log amplitude, MAD, \\
+ & & & range, first-difference; kurtosis, skew, crest factor, spike \\
+ & & & fraction; per-second envelope statistics (quality indices). \\
+\addlinespace
+Accelerometer & 18 & Accelerometer &
+  Magnitude mean/sd/range; band-passed motion energy and \\
+ & & & its 90th percentile; per-axis sd and mean; \\
+ & & & gravity-normalised orientation; jerk; stillness fraction. \\
+\addlinespace
+EDA & 5 & EDA &
+  Log mean, sd and range; linear slope; dead-sensor flag. \\
+\midrule
+\textbf{Scalar features} & \textbf{196} & & \\
+Spline expansion & 1\,764 & --- &
+  Nine normalised Gaussian bumps per scalar, knots at training \\
+(196 $\times$ 9 bumps) & & & percentiles: an additive model, still linear in the features. \\
+\midrule
+\textbf{Final design} & \textbf{1\,960} & & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Final linear model.} Columns are standardised on training statistics, then fitted
+by ridge regression with a separate penalty multiplier per block (scalars, splines) chosen
+from four presets; the ridge coefficient is selected from 27 values spanning
+$10^{-0.5}$--$10^{6}$, all evaluated in closed form from one eigendecomposition. Because
+the graded metric is NMAE rather than squared error, the $L_2$ solution is then refit by
+three IRLS reweightings towards an $L_1$ objective, which targets the conditional median.
+The prediction is
+\[
+  \hat{y} = w_0 + \mathbf{w}^{\!\top}\mathbf{z},
+\]
+one intercept and one coefficient vector: 1\,961 parameters over 158\,986 training windows.
+No dimensionality reduction is used; the eigendecomposition solves the ridge path exactly
+and retains every component.
+
+\textbf{Design selection.} An earlier design added rate\,$\times$\,confidence
+tensor-product bases (2\,172 columns) and coarsened spectral distributions (900 columns),
+5\,032 in total. A block ablation on a held-out quarter of the training data scored
+$0.6557$ for scalars alone, $0.6420$ for scalars\,+\,splines and $0.6420$ for all four
+blocks: the two extra blocks earned nothing beyond the spline expansion, so they were
+removed, cutting the design by 61\% and the fit time roughly tenfold at no measured cost.
+
+% TODO Part (d) feature description goes here.
+
+%======================================================================
+\section*{2.\quad Normalised acceleration}
+
+For accelerometer samples $(a_x(t),a_y(t),a_z(t))$ the squared magnitude is
+$a_{\mathrm{sq}}(t)=a_x(t)^2+a_y(t)^2+a_z(t)^2$, normalised by its temporal mean,
+\[
+  \tilde{a}_{\mathrm{sq}}(t)=\frac{a_{\mathrm{sq}}(t)}
+       {\frac{1}{T}\sum_{\tau=1}^{T} a_{\mathrm{sq}}(\tau)} .
+\]
+
+% TODO figure: representative Part (a) window -- 10 s BVP waveform, normalised squared
+% acceleration magnitude, 40 EDA samples, and the heart-rate target. All axes labelled
+% with units (s, bpm, uS, device units).
+% TODO figure: representative Part (d) five-minute window.
+
+%======================================================================
+\section*{3.\quad Top five features}
+
+Importance is the absolute standardised regression coefficient. Every column is
+standardised before fitting, so $|w|$ is directly comparable across features and needs no
+rescaling. Names carry their modality as a prefix: \feat{t\_} BVP time domain, \feat{a\_}
+accelerometer, \feat{e\_} EDA, \feat{x\_} cross-estimator, \feat{sp\_}/\feat{sg\_}
+harmonic probes, and a surface tag (\feat{S}, \feat{P}, \feat{AR}, \feat{G2}, \feat{G25},
+\feat{G5}, \feat{R}, \feat{AC}) otherwise.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}rlrl@{}}
+\toprule
+\# & \textbf{Feature (modality)} & $|w_{\text{std}}|$ & \textbf{Why it may be relevant} \\
+\midrule
+1 & TODO & TODO & TODO \\
+2 & TODO & TODO & TODO \\
+3 & TODO & TODO & TODO \\
+4 & TODO & TODO & TODO \\
+5 & TODO & TODO & TODO \\
+\bottomrule
+\end{tabular}
+\end{table}
+% TODO fill from: python3 part_c_report.py train.csv report_c.txt
+% TODO Part (d) top-five table.
+
+%======================================================================
+\section*{4.\quad Comparison with the median baseline}
+
+The baseline predicts the median training heart rate for every example. Both predictors
+are scored on the same local validation examples: the model is fitted on the first 75\% of
+training rows and evaluated on the remaining 25\%, which neither the fit nor any
+hyperparameter choice ever sees. Both metrics are normalised so that predicting the
+validation mean scores $1.0$.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Predictor} & \textbf{NMAE} & \textbf{NMSE} \\
+\midrule
+Part (c) model                  & TODO & TODO \\
+Median of training targets      & TODO & TODO \\
+\bottomrule
+\end{tabular}
+\end{table}
+% TODO fill from part_c_report.py; Part (d) needs the same table reported separately
+% for the random within-subject, temporal within-subject and cross-subject protocols.
+
+\end{document}
