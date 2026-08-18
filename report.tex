@@ -2,13 +2,15 @@
 % Compile: pdflatex report.tex    (packages: geometry, booktabs, amsmath)
 % Limit: 3 pages total, covering Parts (a)/(c)/(d) report items.
 \documentclass[10pt,a4paper]{article}
-\usepackage[margin=2cm]{geometry}
+\usepackage[margin=1.6cm]{geometry}
 \usepackage{booktabs}
 \usepackage{amsmath}
 \usepackage[T1]{fontenc}
 \usepackage{graphicx}
 
-\setlength{\parskip}{2pt}
+\setlength{\parskip}{1.5pt}
+\setlength{\textfloatsep}{6pt}
+\setlength{\intextsep}{6pt}
 \setlength{\parindent}{0pt}
 \newcommand{\feat}[1]{\texttt{\small #1}}
 \pagestyle{empty}
@@ -17,7 +19,7 @@
 
 \begin{center}
   {\Large\bfseries COL774 Assignment 1.1 --- Report}\\[2pt]
-  {\small Entry number: 2023CS10058}
+  {\small Entry numbers: 2020CS10058, 2023CS10552}
 \end{center}
 \vspace{-4pt}
 \hrule
@@ -50,7 +52,7 @@ Hann-windowed cosine/sine projections evaluated directly on the bpm grid, since
 \texttt{numpy.fft} is not permitted for this part; only NumPy and pandas are used.
 
 \begin{table}[h]
-\centering\small
+\centering\footnotesize
 \begin{tabular}{@{}lrll@{}}
 \toprule
 \textbf{Family} & \textbf{Count} & \textbf{Modality} & \textbf{Content} \\
@@ -128,7 +130,7 @@ each family carries an explicit \feat{*\_valid}/\feat{*\_miss} indicator, since
 missingness is itself informative.
 
 \begin{table}[h]
-\centering\small
+\centering\footnotesize
 \begin{tabular}{@{}lrll@{}}
 \toprule
 \textbf{Family} & \textbf{Count} & \textbf{Modality} & \textbf{Content} \\
@@ -217,7 +219,7 @@ $a_{\mathrm{sq}}(t)=a_x(t)^2+a_y(t)^2+a_z(t)^2$, normalised by its temporal mean
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.86\textwidth]{part_a_window.pdf}
+\includegraphics[width=0.62\textwidth]{part_a_window.pdf}
 \caption{Representative Part~(a) example. Top: the ten-second BVP waveform
 (device units, 64\,Hz). Middle: normalised squared acceleration magnitude
 $\tilde{a}_{\mathrm{sq}}(t)$ (dimensionless, 32\,Hz), with the dotted line at its
@@ -251,7 +253,7 @@ this window is stated in the panel title.}
 \IfFileExists{fig_d_window.pdf}{%
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.86\textwidth]{fig_d_window.pdf}
+\includegraphics[width=0.62\textwidth]{fig_d_window.pdf}
 \caption{Representative Part~(d) example: the five minutes of physiological signal
 ending at the CGM reading. From top: E4 BVP (64\,Hz, device units); normalised
 squared acceleration magnitude
