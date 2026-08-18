@@ -250,6 +250,19 @@ this window is stated in the panel title.}
 % ----------------------------------------------------------------------
 
 %======================================================================
+\IfFileExists{fig_d_window.pdf}{%
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.86\textwidth]{fig_d_window.pdf}
+\caption{Representative Part~(d) example: the five minutes of physiological signal
+ending at the CGM reading. From top: E4 BVP (64\,Hz, device units); normalised
+squared acceleration magnitude
+$\tilde{a}_{\mathrm{sq}}(t)=a_{\mathrm{sq}}(t)/\overline{a_{\mathrm{sq}}}$ from the
+E4 accelerometer (32\,Hz, dimensionless, dotted line at the window mean of $1$);
+E4 EDA (4\,Hz, $\mu$S); Zephyr ECG (250\,Hz, mV); and the E4 heart-rate stream
+(1\,Hz, bpm). The CGM glucose target for this window is stated in the panel title.}
+\end{figure}}{}
+
 \section*{3.\quad Top five features}
 
 Importance is the absolute standardised regression coefficient. Every column is
