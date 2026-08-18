@@ -11,7 +11,7 @@ fastMode = os.environ.get("PARTC_FAST", "0") == "1"
 startTime = time.time()
 
 
-def logProgress(message):
+def log(message):
     sys.stderr.write("[%7.1fs] %s\n" % (time.time() - startTime, message))
     sys.stderr.flush()
 
@@ -19,140 +19,149 @@ def logProgress(message):
 blocksPerWindow, valuesPerBlock = 10, 164
 bvpColumns = np.concatenate([np.arange(valuesPerBlock * block + 96, valuesPerBlock * block + 160)
                              for block in range(blocksPerWindow)])
-accColumnsPerAxis = [np.concatenate([np.arange(valuesPerBlock * block + 32 * axis,
+accColumns = [np.concatenate([np.arange(valuesPerBlock * block + 32 * axis,
                                                valuesPerBlock * block + 32 * (axis + 1))
                                      for block in range(blocksPerWindow)]) for axis in range(3)]
 edaColumns = np.concatenate([np.arange(valuesPerBlock * block + 160, valuesPerBlock * block + 164)
                              for block in range(blocksPerWindow)])
 
-bvpSampleRateHz, accSampleRateHz = 64.0, 32.0
-accSamplesPerWindow = 320
+bvpHz, accHz = 64.0, 32.0
+accSamples = 320
 
 candidateBpm = np.arange(36.0, 216.0, 0.5)
 candidateCount = len(candidateBpm)
 candidateBpm32 = candidateBpm.astype(np.float32)
-candidateHz = candidateBpm / 60.0                       
+candidateHz = candidateBpm / 60.0
 def logSafe(value):
     return np.log(np.maximum(value, 1e-12)).astype(np.float32)
 
 
-def cosSinProjection(sampleCount, sampleRateHz, targetHz):
-    timeSeconds = np.arange(sampleCount) / sampleRateHz
-    hannWindow = np.hanning(sampleCount)
-    angle = 2.0 * np.pi * np.outer(timeSeconds, targetHz)
-    return ((np.cos(angle) * hannWindow[:, None]).astype(np.float32),
-            (np.sin(angle) * hannWindow[:, None]).astype(np.float32))
+def cosSinProjection(n, rateHz, targetHz):
+    t = np.arange(n) / rateHz
+    window = np.hanning(n)
+    angle = 2.0 * np.pi * np.outer(t, targetHz)
+    return ((np.cos(angle) * window[:, None]).astype(np.float32),
+            (np.sin(angle) * window[:, None]).astype(np.float32))
 
 
 subWindowLengths = (640, 320, 256, 160, 128, 80)
-bvpProjectionByLength = {length: cosSinProjection(length, bvpSampleRateHz, candidateHz)
+bvpProjection = {length: cosSinProjection(length, bvpHz, candidateHz)
                          for length in subWindowLengths}
-accCosProjection, accSinProjection = cosSinProjection(accSamplesPerWindow, accSampleRateHz, candidateHz)
-autocorrelationKernel = np.cos(2.0 * np.pi * candidateHz[:, None] * (60.0 / candidateBpm)[None, :]).astype(np.float32)
+accCos, accSin = cosSinProjection(accSamples, accHz, candidateHz)
+autocorrKernel = np.cos(2.0 * np.pi * candidateHz[:, None]
+                        * (60.0 / candidateBpm)[None, :]).astype(np.float32)
 
 
-def movingAverage(rows, windowLength):
-    if windowLength <= 1:
+def movingAverage(rows, width):
+    if width <= 1:
         return rows
-    leftPad = windowLength // 2
-    padded = np.pad(rows, ((0, 0), (leftPad, windowLength - 1 - leftPad)), mode="edge")
-    cumulative = np.cumsum(padded, axis=1, dtype=np.float32)
-    cumulative = np.concatenate([np.zeros((len(rows), 1), np.float32), cumulative], 1)
-    return (cumulative[:, windowLength:] - cumulative[:, :-windowLength]) * np.float32(1.0 / windowLength)
+    pad = width // 2
+    padded = np.pad(rows, ((0, 0), (pad, width - 1 - pad)), mode="edge")
+    cumsum = np.cumsum(padded, axis=1, dtype=np.float32)
+    cumsum = np.concatenate([np.zeros((len(rows), 1), np.float32), cumsum], 1)
+    return (cumsum[:, width:] - cumsum[:, :-width]) * np.float32(1.0 / width)
 
 
-def bandPass(rows, shortWindow, longWindow):
-    return movingAverage(rows, shortWindow) - movingAverage(rows, longWindow)
+def bandPass(rows, short, long):
+    return movingAverage(rows, short) - movingAverage(rows, long)
 
 
-def powerSpectrum(rows, cosBasis, sinBasis):
+def powerSpectrum(rows, cosB, sinB):
     centred = rows - rows.mean(1, keepdims=True)
-    return (centred @ cosBasis) ** 2 + (centred @ sinBasis) ** 2
+    return (centred @ cosB) ** 2 + (centred @ sinB) ** 2
 
 
 def normaliseRows(rows):
     return rows / (rows.sum(1, keepdims=True) + np.float32(1e-20))
 
 
-def softmaxRows(scores, temperature):
-    scaled = (scores - scores.max(1, keepdims=True)) * np.float32(1.0 / temperature)
-    exponentials = np.exp(scaled, dtype=np.float32)
-    return exponentials / (exponentials.sum(1, keepdims=True) + np.float32(1e-20))
+def softmaxRows(scores, temp):
+    scaled = (scores - scores.max(1, keepdims=True)) * np.float32(1.0 / temp)
+    weights = np.exp(scaled, dtype=np.float32)
+    return weights / (weights.sum(1, keepdims=True) + np.float32(1e-20))
 
 
-def autoregressiveSpectrum(rows, order, ridgeFactor=1e-3):
-    normalised = rows - rows.mean(1, keepdims=True)
-    normalised = normalised / (normalised.std(1, keepdims=True) + np.float32(1e-6))
-    rowCount, length = normalised.shape
-    autocovariance = np.empty((rowCount, order + 1), np.float32)
-    for lagIndex in range(order + 1):
-        autocovariance[:, lagIndex] = np.einsum("ij,ij->i", normalised[:, :length - lagIndex], normalised[:, lagIndex:]) / length
-    toeplitzIndex = np.abs(np.arange(order)[:, None] - np.arange(order)[None, :])
-    toeplitzMatrix = autocovariance[:, toeplitzIndex].copy()                                   
-    toeplitzMatrix[:, np.arange(order), np.arange(order)] *= np.float32(1.0 + ridgeFactor)
-    arCoefficients = np.linalg.solve(toeplitzMatrix, autocovariance[:, 1:order + 1][..., None])[..., 0]
-    innovationVariance = np.maximum(autocovariance[:, 0] - (arCoefficients * autocovariance[:, 1:order + 1]).sum(1), 1e-6)
-    lagIndex = np.arange(1, order + 1)
-    angle = 2.0 * np.pi * np.outer(candidateHz / bvpSampleRateHz, lagIndex)
-    cosTerms = np.ascontiguousarray(np.cos(angle).T.astype(np.float32))
-    sinTerms = np.ascontiguousarray(np.sin(angle).T.astype(np.float32))
-    return (innovationVariance[:, None] / ((1 - arCoefficients @ cosTerms) ** 2 + (arCoefficients @ sinTerms) ** 2 + 1e-9)).astype(np.float32)
+def arSpectrum(rows, order, ridge=1e-3):
+    z = rows - rows.mean(1, keepdims=True)
+    z = z / (z.std(1, keepdims=True) + np.float32(1e-6))
+    n, span = z.shape
+    autocov = np.empty((n, order + 1), np.float32)
+    for lag in range(order + 1):
+        autocov[:, lag] = np.einsum("ij,ij->i", z[:, :span - lag], z[:, lag:]) / span
+    toeplitzIdx = np.abs(np.arange(order)[:, None] - np.arange(order)[None, :])
+    toeplitz = autocov[:, toeplitzIdx].copy()
+    toeplitz[:, np.arange(order), np.arange(order)] *= np.float32(1.0 + ridge)
+    arCoef = np.linalg.solve(toeplitz, autocov[:, 1:order + 1][..., None])[..., 0]
+    innovation = np.maximum(autocov[:, 0] - (arCoef * autocov[:, 1:order + 1]).sum(1), 1e-6)
+    lag = np.arange(1, order + 1)
+    angle = 2.0 * np.pi * np.outer(candidateHz / bvpHz, lag)
+    cosB = np.ascontiguousarray(np.cos(angle).T.astype(np.float32))
+    sinB = np.ascontiguousarray(np.sin(angle).T.astype(np.float32))
+    return (innovation[:, None]
+            / ((1 - arCoef @ cosB) ** 2 + (arCoef @ sinB) ** 2 + 1e-9)).astype(np.float32)
 
 
-def peakBpmSubBin(surface):
-    peakIndex = np.argmax(surface, 1)
-    rowIndex = np.arange(len(surface))
-    clampedIndex = np.clip(peakIndex, 1, surface.shape[1] - 2)
-    leftScore, centreScore, rightScore = surface[rowIndex, clampedIndex - 1], surface[rowIndex, clampedIndex], surface[rowIndex, clampedIndex + 1]
-    curvature = leftScore - 2 * centreScore + rightScore
-    wellFormed = np.abs(curvature) > 1e-20
-    subBinOffset = np.clip(np.where(wellFormed, 0.5 * (leftScore - rightScore) / np.where(wellFormed, curvature, 1.0), 0.0), -1, 1)
-    return (candidateBpm32[clampedIndex] + subBinOffset * np.float32(candidateBpm[1] - candidateBpm[0])).astype(np.float32), surface[rowIndex, peakIndex].astype(np.float32)
+def peakBpm(surface):
+    peak = np.argmax(surface, 1)
+    row = np.arange(len(surface))
+    centre = np.clip(peak, 1, surface.shape[1] - 2)
+    left, mid, right = surface[row, centre - 1], surface[row, centre], surface[row, centre + 1]
+    curve = left - 2 * mid + right
+    valid = np.abs(curve) > 1e-20
+    offset = np.clip(np.where(valid, 0.5 * (left - right) / np.where(valid, curve, 1.0), 0.0),
+                     -1, 1)
+    return ((candidateBpm32[centre]
+             + offset * np.float32(candidateBpm[1] - candidateBpm[0])).astype(np.float32),
+            surface[row, peak].astype(np.float32))
 
 
-def strongestPeaks(surface, peakCount=3, guardBpm=10.0):
+def strongestPeaks(surface, count=3, guard=10.0):
     masked = surface.copy()
-    peakBpms, peakScores = [], []
-    for _ in range(peakCount):
-        peakBpm, peakScore = peakBpmSubBin(masked)
-        peakBpms.append(peakBpm)
-        peakScores.append(peakScore)
-        masked = np.where(np.abs(candidateBpm32[None, :] - peakBpm[:, None]) < np.float32(guardBpm),
+    bpms, scores = [], []
+    for _ in range(count):
+        bpm, score = peakBpm(masked)
+        bpms.append(bpm)
+        scores.append(score)
+        masked = np.where(np.abs(candidateBpm32[None, :] - bpm[:, None]) < np.float32(guard),
                       np.float32(-1e30), masked)
-    return np.stack(peakBpms, 1), np.stack(peakScores, 1)
+    return np.stack(bpms, 1), np.stack(scores, 1)
 
 
-def lookupSharedBpm(surface, targetBpm):
-    position = np.clip((np.asarray(targetBpm) - candidateBpm[0]) / (candidateBpm[1] - candidateBpm[0]), 0, candidateCount - 1.001)
-    lowerIndex = position.astype(np.int32)
-    fraction = (position - lowerIndex).astype(np.float32)
-    return surface[:, lowerIndex] * (1 - fraction) + surface[:, lowerIndex + 1] * fraction
+def lookupBpm(surface, bpm):
+    pos = np.clip((np.asarray(bpm) - candidateBpm[0]) / (candidateBpm[1] - candidateBpm[0]),
+                  0, candidateCount - 1.001)
+    lo = pos.astype(np.int32)
+    frac = (pos - lo).astype(np.float32)
+    return surface[:, lo] * (1 - frac) + surface[:, lo + 1] * frac
 
 
-def lookupPerRowBpm(surface, targetBpm):
-    position = np.clip((np.asarray(targetBpm) - candidateBpm[0]) / (candidateBpm[1] - candidateBpm[0]), 0, candidateCount - 1.001)
-    lowerIndex = position.astype(np.int32)
-    fraction = (position - lowerIndex).astype(np.float32)
-    rowIndex = np.arange(len(surface))
-    return (surface[rowIndex, lowerIndex] * (1 - fraction) + surface[rowIndex, lowerIndex + 1] * fraction).astype(np.float32)
+def lookupBpmPerRow(surface, bpm):
+    pos = np.clip((np.asarray(bpm) - candidateBpm[0]) / (candidateBpm[1] - candidateBpm[0]),
+                  0, candidateCount - 1.001)
+    lo = pos.astype(np.int32)
+    frac = (pos - lo).astype(np.float32)
+    row = np.arange(len(surface))
+    return (surface[row, lo] * (1 - frac) + surface[row, lo + 1] * frac).astype(np.float32)
 
 
-def appendNamedColumns(columns, columnNames, prefix, namedValues):
-    for suffix, values in namedValues:
+def addColumns(columns, names, prefix, pairs):
+    for suffix, values in pairs:
         columns.append(np.asarray(values, np.float32)[:, None])
-        columnNames.append(prefix + suffix)
+        names.append(prefix + suffix)
 
 
-def gaussianBumpBasis(values, centres, width):
-    distance = (np.asarray(values, np.float32)[:, None] -
+def bumpBasis(values, centres, width):
+    z = (np.asarray(values, np.float32)[:, None] -
          np.asarray(centres, np.float32)[None, :]) * np.float32(1.0 / max(width, 1e-6))
-    bump = np.exp(-0.5 * distance * distance)
+    bump = np.exp(-0.5 * z * z)
     return (bump / (bump.sum(1, keepdims=True) + np.float32(1e-9))).astype(np.float32)
 
 
-subWindowConsensusConfigs = ((320, 64, "g5"), (256, 48, "g4"), (160, 32, "g25"), (128, 32, "g2"), (80, 16, "g125"))
+consensusConfigs = ((320, 64, "g5"), (256, 48, "g4"), (160, 32, "g25"),
+                    (128, 32, "g2"), (80, 16, "g125"))
 if fastMode:
-    subWindowConsensusConfigs = ((320, 64, "g5"), (256, 64, "g4"), (160, 48, "g25"), (128, 48, "g2"), (80, 32, "g125"))
+    consensusConfigs = ((320, 64, "g5"), (256, 64, "g4"), (160, 48, "g25"),
+                        (128, 48, "g2"), (80, 32, "g125"))
 
 mainScoreWeights = {
     "lP": 0.25, "lPwhite": 0.5, "lAR": -0.25, "lAR2": 4.0, "lR": 0.5, "lRaw": -0.5,
@@ -164,203 +173,213 @@ consensusScoreWeights = {"g2": 1.0, "g25": 1.0, "g5": 1.0, "lP": 0.5, "prior": 0
 spectralScoreWeights = {"lP": 1.0, "lAR": 1.0, "lR": 0.5}
 
 
-def buildEvidenceSurfaces(bvp, acc, logRatePrior):
-    bvpRaw = np.ascontiguousarray(bvp, np.float32)
-    bvpBandPassed = bandPass(bvpRaw, 5, 61)
+def buildSurfaces(bvp, acc, prior):
+    raw = np.ascontiguousarray(bvp, np.float32)
+    band = bandPass(raw, 5, 61)
     surfaces = {}
 
-    spectrum = normaliseRows(powerSpectrum(bvpBandPassed, *bvpProjectionByLength[640]))
+    spectrum = normaliseRows(powerSpectrum(band, *bvpProjection[640]))
     surfaces["lP"] = logSafe(spectrum)
-    surfaces["lPwhite"] = surfaces["lP"] - movingAverage(surfaces["lP"], 61)      
-    surfaces["lAR"] = logSafe(normaliseRows(autoregressiveSpectrum(bvpBandPassed, 32)))
-    surfaces["lAR2"] = logSafe(normaliseRows(autoregressiveSpectrum(bvpBandPassed, 20)))
-    autocorrelation = spectrum @ autocorrelationKernel                                            
-    surfaces["lR"] = logSafe(normaliseRows(np.maximum(autocorrelation - autocorrelation.min(1, keepdims=True), 1e-9)))
-    surfaces["lRaw"] = logSafe(normaliseRows(powerSpectrum(bvpRaw, *bvpProjectionByLength[640])))               
+    surfaces["lPwhite"] = surfaces["lP"] - movingAverage(surfaces["lP"], 61)
+    surfaces["lAR"] = logSafe(normaliseRows(arSpectrum(band, 32)))
+    surfaces["lAR2"] = logSafe(normaliseRows(arSpectrum(band, 20)))
+    autocorr = spectrum @ autocorrKernel
+    surfaces["lR"] = logSafe(normaliseRows(
+        np.maximum(autocorr - autocorr.min(1, keepdims=True), 1e-9)))
+    surfaces["lRaw"] = logSafe(normaliseRows(powerSpectrum(raw, *bvpProjection[640])))
 
     accRaw = np.ascontiguousarray(acc, np.float32)
-    accSpectrum = normaliseRows(powerSpectrum(accRaw[:, 0], accCosProjection, accSinProjection) + powerSpectrum(accRaw[:, 1], accCosProjection, accSinProjection) + powerSpectrum(accRaw[:, 2], accCosProjection, accSinProjection))
+    accSpectrum = normaliseRows(powerSpectrum(accRaw[:, 0], accCos, accSin)
+                                + powerSpectrum(accRaw[:, 1], accCos, accSin)
+                                + powerSpectrum(accRaw[:, 2], accCos, accSin))
     surfaces["lPA"] = logSafe(accSpectrum)
-    surfaces["prior"] = np.repeat(logRatePrior, len(bvpRaw), 0)
+    surfaces["prior"] = np.repeat(prior, len(raw), 0)
 
-    for length, hop, name in subWindowConsensusConfigs:                            
-        cosBasis, sinBasis = bvpProjectionByLength[length]
-        logSpectrumSum = None
-        subWindowCount = 0
-        for start in range(0, bvpBandPassed.shape[1] - length + 1, hop):
-            logSpectrum = logSafe(normaliseRows(powerSpectrum(bvpBandPassed[:, start:start + length], cosBasis, sinBasis)))
-            logSpectrumSum = logSpectrum if logSpectrumSum is None else logSpectrumSum + logSpectrum
-            subWindowCount += 1
-        surfaces[name] = logSpectrumSum * np.float32(1.0 / subWindowCount)
+    for span, hop, name in consensusConfigs:
+        cosB, sinB = bvpProjection[span]
+        logSum = None
+        count = 0
+        for start in range(0, band.shape[1] - span + 1, hop):
+            logSpec = logSafe(normaliseRows(powerSpectrum(band[:, start:start + span], cosB, sinB)))
+            logSum = logSpec if logSum is None else logSum + logSpec
+            count += 1
+        surfaces[name] = logSum * np.float32(1.0 / count)
     surfaces["g25w"] = surfaces["g25"] - movingAverage(surfaces["g25"], 61)
 
-    surfaces["lP2"] = lookupSharedBpm(surfaces["lP"], candidateBpm * 2)
-    surfaces["lP3"] = lookupSharedBpm(surfaces["lP"], candidateBpm * 3)
-    surfaces["lPh"] = lookupSharedBpm(surfaces["lP"], candidateBpm / 2)
-    surfaces["lPh3"] = lookupSharedBpm(surfaces["lP"], candidateBpm / 3)
-    surfaces["g5_2"] = lookupSharedBpm(surfaces["g5"], candidateBpm * 2)
-    surfaces["g5_h"] = lookupSharedBpm(surfaces["g5"], candidateBpm / 2)
-    return surfaces, bvpBandPassed, spectrum, accSpectrum
+    surfaces["lP2"] = lookupBpm(surfaces["lP"], candidateBpm * 2)
+    surfaces["lP3"] = lookupBpm(surfaces["lP"], candidateBpm * 3)
+    surfaces["lPh"] = lookupBpm(surfaces["lP"], candidateBpm / 2)
+    surfaces["lPh3"] = lookupBpm(surfaces["lP"], candidateBpm / 3)
+    surfaces["g5_2"] = lookupBpm(surfaces["g5"], candidateBpm * 2)
+    surfaces["g5_h"] = lookupBpm(surfaces["g5"], candidateBpm / 2)
+    return surfaces, band, spectrum, accSpectrum
 
 
 def combineSurfaces(surfaces, weights):
     total = None
     for name, weight in weights.items():
         if weight and name in surfaces:
-            total = np.float32(weight) * surfaces[name] if total is None else total + np.float32(weight) * surfaces[name]
+            total = (np.float32(weight) * surfaces[name] if total is None
+                     else total + np.float32(weight) * surfaces[name])
     total = total - total.mean(1, keepdims=True)
     return total / (total.std(1, keepdims=True) + np.float32(1e-6))
 
 
-def describeSurface(surface, tag, columns, columnNames):
-    peakBpm, _ = peakBpmSubBin(surface)
-    distribution = softmaxRows(surface, 1.0)
-    centroidBpm = distribution @ candidateBpm32
-    cumulative = np.cumsum(distribution, 1)
-    medianBpm = candidateBpm32[np.argmax(cumulative >= 0.5, 1)]
-    lowerQuartileBpm = candidateBpm32[np.argmax(cumulative >= 0.25, 1)]
-    upperQuartileBpm = candidateBpm32[np.argmax(cumulative >= 0.75, 1)]
-    entropy = -(distribution * np.log(distribution + 1e-12)).sum(1)
-    spreadBpm = np.sqrt(np.maximum(distribution @ (candidateBpm32 ** 2) - centroidBpm ** 2, 0))
-    peakBpms, peakScores = strongestPeaks(surface, 3, 10.0)
-    appendNamedColumns(columns, columnNames, tag + "_",
-         (("pk", peakBpm), ("p2", peakBpms[:, 1]), ("p3", peakBpms[:, 2]),
-          ("m12", peakScores[:, 0] - peakScores[:, 1]), ("m13", peakScores[:, 0] - peakScores[:, 2]),
-          ("d12", peakBpms[:, 1] - peakBpm), ("d13", peakBpms[:, 2] - peakBpm),
-          ("cen", centroidBpm), ("med", medianBpm), ("q25", lowerQuartileBpm), ("q75", upperQuartileBpm),
-          ("iqr", upperQuartileBpm - lowerQuartileBpm), ("ent", entropy), ("sd", spreadBpm)))
-    return peakBpm, peakScores, entropy
+def describeSurface(surface, tag, columns, names):
+    peakRate, _ = peakBpm(surface)
+    dist = softmaxRows(surface, 1.0)
+    centroid = dist @ candidateBpm32
+    cumsum = np.cumsum(dist, 1)
+    median = candidateBpm32[np.argmax(cumsum >= 0.5, 1)]
+    q25 = candidateBpm32[np.argmax(cumsum >= 0.25, 1)]
+    q75 = candidateBpm32[np.argmax(cumsum >= 0.75, 1)]
+    entropy = -(dist * np.log(dist + 1e-12)).sum(1)
+    spread = np.sqrt(np.maximum(dist @ (candidateBpm32 ** 2) - centroid ** 2, 0))
+    bpms, scores = strongestPeaks(surface, 3, 10.0)
+    addColumns(columns, names, tag + "_",
+         (("pk", peakRate), ("p2", bpms[:, 1]), ("p3", bpms[:, 2]),
+          ("m12", scores[:, 0] - scores[:, 1]), ("m13", scores[:, 0] - scores[:, 2]),
+          ("d12", bpms[:, 1] - peakRate), ("d13", bpms[:, 2] - peakRate),
+          ("cen", centroid), ("med", median), ("q25", q25), ("q75", q75),
+          ("iqr", q75 - q25), ("ent", entropy), ("sd", spread)))
+    return peakRate, scores, entropy
 
 
-def addBvpWaveformFeatures(bvp, bvpBandPassed, columns, columnNames):
-    bvpRaw = np.ascontiguousarray(bvp, np.float32)
-    bvpWideBand = bandPass(bvpRaw, 9, 81)
-    pulseAmplitude = bvpBandPassed.std(1) + np.float32(1e-6)
-    standardised = bvpBandPassed / pulseAmplitude[:, None]
-    firstDifference = np.diff(bvpBandPassed, axis=1)
-    perSecondAmplitude = bvpBandPassed.reshape(len(bvpBandPassed), 10, 64).std(2)   
-    appendNamedColumns(columns, columnNames, "t_", (
-        ("zc", (np.diff(np.signbit(bvpBandPassed), axis=1).sum(1) / 2.0) * 6.0),
-        ("zc2", (np.diff(np.signbit(bvpWideBand), axis=1).sum(1) / 2.0) * 6.0),
-        ("lamp", np.log(pulseAmplitude)), ("lraw", np.log(bvpRaw.std(1) + 1e-6)),
-        ("lmad", np.log(np.abs(bvpBandPassed).mean(1) + 1e-6)),
-        ("kurt", (standardised ** 4).mean(1)), ("skew", (standardised ** 3).mean(1)),
-        ("ldiff", np.log(np.abs(firstDifference).mean(1) + 1e-6)),
-        ("crest", np.abs(bvpBandPassed).max(1) / pulseAmplitude),
-        ("lrange", np.log(bvpRaw.max(1) - bvpRaw.min(1) + 1e-6)),
-        ("nfrac", (np.abs(standardised) > 3).mean(1)),
-        ("envcv", perSecondAmplitude.std(1) / pulseAmplitude),
-        ("envmax", np.log(perSecondAmplitude.max(1) + 1e-6)),
-        ("envmin", np.log(perSecondAmplitude.min(1) + 1e-6))))
-    return np.log(pulseAmplitude).astype(np.float32)
+def addBvpFeatures(bvp, band, columns, names):
+    raw = np.ascontiguousarray(bvp, np.float32)
+    wide = bandPass(raw, 9, 81)
+    amplitude = band.std(1) + np.float32(1e-6)
+    z = band / amplitude[:, None]
+    diff = np.diff(band, axis=1)
+    perSecond = band.reshape(len(band), 10, 64).std(2)
+    addColumns(columns, names, "t_", (
+        ("zc", (np.diff(np.signbit(band), axis=1).sum(1) / 2.0) * 6.0),
+        ("zc2", (np.diff(np.signbit(wide), axis=1).sum(1) / 2.0) * 6.0),
+        ("lamp", np.log(amplitude)), ("lraw", np.log(raw.std(1) + 1e-6)),
+        ("lmad", np.log(np.abs(band).mean(1) + 1e-6)),
+        ("kurt", (z ** 4).mean(1)), ("skew", (z ** 3).mean(1)),
+        ("ldiff", np.log(np.abs(diff).mean(1) + 1e-6)),
+        ("crest", np.abs(band).max(1) / amplitude),
+        ("lrange", np.log(raw.max(1) - raw.min(1) + 1e-6)),
+        ("nfrac", (np.abs(z) > 3).mean(1)),
+        ("envcv", perSecond.std(1) / amplitude),
+        ("envmax", np.log(perSecond.max(1) + 1e-6)),
+        ("envmin", np.log(perSecond.min(1) + 1e-6))))
+    return np.log(amplitude).astype(np.float32)
 
 
-def addMotionFeatures(acc, bvpBandPassed, columns, columnNames):
-    accRaw = np.ascontiguousarray(acc, np.float32)
-    magnitude = np.sqrt((accRaw ** 2).sum(1))
-    magnitudeBandPassed = bandPass(magnitude, 3, 41)
-    axisStd = accRaw.std(2)
-    axisMean = accRaw.mean(2)
-    axisMeanTotal = np.abs(axisMean).sum(1) + np.float32(1e-3)
-    appendNamedColumns(columns, columnNames, "a_", (
+def addMotionFeatures(acc, band, columns, names):
+    raw = np.ascontiguousarray(acc, np.float32)
+    magnitude = np.sqrt((raw ** 2).sum(1))
+    motion = bandPass(magnitude, 3, 41)
+    axisStd = raw.std(2)
+    axisMean = raw.mean(2)
+    axisTotal = np.abs(axisMean).sum(1) + np.float32(1e-3)
+    addColumns(columns, names, "a_", (
         ("magm", magnitude.mean(1)), ("magsd", magnitude.std(1)),
         ("lmagsd", np.log(magnitude.std(1) + 1e-3)),
-        ("lbpsd", np.log(magnitudeBandPassed.std(1) + 1e-3)),
+        ("lbpsd", np.log(motion.std(1) + 1e-3)),
         ("sdx", axisStd[:, 0]), ("sdy", axisStd[:, 1]), ("sdz", axisStd[:, 2]),
         ("lsd", np.log(axisStd.sum(1) + 1e-3)),
         ("mx", axisMean[:, 0]), ("my", axisMean[:, 1]), ("mz", axisMean[:, 2]),
-        ("nx", axisMean[:, 0] / axisMeanTotal), ("ny", axisMean[:, 1] / axisMeanTotal),
-        ("nz", axisMean[:, 2] / axisMeanTotal),
+        ("nx", axisMean[:, 0] / axisTotal), ("ny", axisMean[:, 1] / axisTotal),
+        ("nz", axisMean[:, 2] / axisTotal),
         ("magrange", magnitude.max(1) - magnitude.min(1)),
         ("jerk", np.log(np.abs(np.diff(magnitude, axis=1)).mean(1) + 1e-3)),
-        ("q90", np.percentile(np.abs(magnitudeBandPassed), 90, axis=1)),
-        ("still", (np.abs(magnitudeBandPassed) < 2).mean(1))))
-    bvpEnvelope = movingAverage(np.abs(bvpBandPassed), 33)[:, ::2][:, :accSamplesPerWindow]
-    envelopeCentred = bvpEnvelope - bvpEnvelope.mean(1, keepdims=True)
-    motionCentred = magnitudeBandPassed - magnitudeBandPassed.mean(1, keepdims=True)
-    appendNamedColumns(columns, columnNames, "x_", (("envacc", (envelopeCentred * motionCentred).sum(1) /
-                             (np.sqrt((envelopeCentred ** 2).sum(1) * (motionCentred ** 2).sum(1)) + 1e-6)),))
+        ("q90", np.percentile(np.abs(motion), 90, axis=1)),
+        ("still", (np.abs(motion) < 2).mean(1))))
+    envelope = movingAverage(np.abs(band), 33)[:, ::2][:, :accSamples]
+    envC = envelope - envelope.mean(1, keepdims=True)
+    motC = motion - motion.mean(1, keepdims=True)
+    addColumns(columns, names, "x_", (("envacc", (envC * motC).sum(1) /
+                             (np.sqrt((envC ** 2).sum(1) * (motC ** 2).sum(1)) + 1e-6)),))
     return np.log(axisStd.sum(1) + 1e-3).astype(np.float32)
 
 
-def addEdaFeatures(eda, columns, columnNames):
-    edaRaw = np.ascontiguousarray(eda, np.float32)
-    normalisedTime = np.arange(edaRaw.shape[1], dtype=np.float32)
-    normalisedTime = (normalisedTime - normalisedTime.mean()) / normalisedTime.std()
-    appendNamedColumns(columns, columnNames, "e_", (
-        ("lmean", np.log(edaRaw.mean(1) + 1e-3)), ("lstd", np.log(edaRaw.std(1) + 1e-4)),
-        ("slope", (edaRaw * normalisedTime).mean(1)), ("zero", (edaRaw.max(1) <= 1e-6).astype(np.float32)),
-        ("lrng", np.log(edaRaw.max(1) - edaRaw.min(1) + 1e-4))))
+def addEdaFeatures(eda, columns, names):
+    raw = np.ascontiguousarray(eda, np.float32)
+    t = np.arange(raw.shape[1], dtype=np.float32)
+    t = (t - t.mean()) / t.std()
+    addColumns(columns, names, "e_", (
+        ("lmean", np.log(raw.mean(1) + 1e-3)), ("lstd", np.log(raw.std(1) + 1e-4)),
+        ("slope", (raw * t).mean(1)), ("zero", (raw.max(1) <= 1e-6).astype(np.float32)),
+        ("lrng", np.log(raw.max(1) - raw.min(1) + 1e-4))))
 
 
-def buildScalarFeatures(bvp, acc, eda, logRatePrior):
-    columns, columnNames = [], []
-    surfaces, bvpBandPassed, _, _ = buildEvidenceSurfaces(bvp, acc, logRatePrior)
+def buildFeatures(bvp, acc, eda, prior):
+    columns, names = [], []
+    surfaces, band, _, _ = buildSurfaces(bvp, acc, prior)
 
     mainScore = combineSurfaces(surfaces, mainScoreWeights)
-    mainRateBpm, _, _ = describeSurface(mainScore, "S", columns, columnNames)
+    mainRate, _, _ = describeSurface(mainScore, "S", columns, names)
     consensusScore = combineSurfaces(surfaces, consensusScoreWeights)
-    consensusRateBpm, _, _ = describeSurface(consensusScore, "S2", columns, columnNames)
+    consensusRate, _, _ = describeSurface(consensusScore, "S2", columns, names)
     spectralScore = combineSurfaces(surfaces, spectralScoreWeights)
-    spectralRateBpm, _, _ = describeSurface(spectralScore, "S3", columns, columnNames)
+    spectralRate, _, _ = describeSurface(spectralScore, "S3", columns, names)
     del mainScore, consensusScore, spectralScore
 
-    peakByTag = {}
-    for surfaceKey, tag in (("lP", "P"), ("lAR", "AR"), ("g2", "G2"), ("g25", "G25"),
+    peaks = {}
+    for key, tag in (("lP", "P"), ("lAR", "AR"), ("g2", "G2"), ("g25", "G25"),
                      ("g5", "G5"), ("lR", "R"), ("lPA", "AC")):
-        peakByTag[tag], _, _ = describeSurface(surfaces[surfaceKey], tag, columns, columnNames)
-    periodogramRateBpm, autoregressiveRateBpm, consensus2sRateBpm = peakByTag["P"], peakByTag["AR"], peakByTag["G2"]
-    consensus25sRateBpm, consensus5sRateBpm, autocorrelationRateBpm = peakByTag["G25"], peakByTag["G5"], peakByTag["R"]
+        peaks[tag], _, _ = describeSurface(surfaces[key], tag, columns, names)
+    periodogramRate, arRate, rate2s = peaks["P"], peaks["AR"], peaks["G2"]
+    rate25s, rate5s, autocorrRate = peaks["G25"], peaks["G5"], peaks["R"]
 
-    rateEstimates = np.stack([mainRateBpm, consensusRateBpm, spectralRateBpm, periodogramRateBpm, autoregressiveRateBpm, consensus2sRateBpm, consensus25sRateBpm, consensus5sRateBpm, autocorrelationRateBpm], 1)
-    columns.append(rateEstimates.std(1, keepdims=True)); columnNames.append("x_std")
-    columns.append(np.median(rateEstimates, 1, keepdims=True).astype(np.float32)); columnNames.append("x_med")
-    columns.append(rateEstimates.mean(1, keepdims=True)); columnNames.append("x_mean")
-    for estimatorIndex, name in enumerate(("P", "AR", "g2", "g25", "g5", "R")):
-        columns.append(np.abs(rateEstimates[:, 3 + estimatorIndex] - mainRateBpm)[:, None]); columnNames.append("x_dev_" + name)
-    estimatorAgreement = (np.abs(rateEstimates - mainRateBpm[:, None]) < 4).mean(1).astype(np.float32)
-    columns.append(estimatorAgreement[:, None]); columnNames.append("x_agree")
-    for harmonicMultiple, name in ((1.0, "f"), (2.0, "2f"), (0.5, "hf"), (3.0, "3f")):
-        columns.append(lookupPerRowBpm(surfaces["lP"], mainRateBpm * harmonicMultiple)[:, None]); columnNames.append("sp_" + name)
-        columns.append(lookupPerRowBpm(surfaces["g2"], mainRateBpm * harmonicMultiple)[:, None]); columnNames.append("sg_" + name)
+    estimates = np.stack([mainRate, consensusRate, spectralRate, periodogramRate,
+                          arRate, rate2s, rate25s, rate5s, autocorrRate], 1)
+    columns.append(estimates.std(1, keepdims=True)); names.append("x_std")
+    columns.append(np.median(estimates, 1, keepdims=True).astype(np.float32)); names.append("x_med")
+    columns.append(estimates.mean(1, keepdims=True)); names.append("x_mean")
+    for i, name in enumerate(("P", "AR", "g2", "g25", "g5", "R")):
+        columns.append(np.abs(estimates[:, 3 + i] - mainRate)[:, None])
+        names.append("x_dev_" + name)
+    agreement = (np.abs(estimates - mainRate[:, None]) < 4).mean(1).astype(np.float32)
+    columns.append(agreement[:, None]); names.append("x_agree")
+    for multiple, name in ((1.0, "f"), (2.0, "2f"), (0.5, "hf"), (3.0, "3f")):
+        columns.append(lookupBpmPerRow(surfaces["lP"], mainRate * multiple)[:, None])
+        names.append("sp_" + name)
+        columns.append(lookupBpmPerRow(surfaces["g2"], mainRate * multiple)[:, None])
+        names.append("sg_" + name)
     del surfaces
 
-    addBvpWaveformFeatures(bvp, bvpBandPassed, columns, columnNames)
-    addMotionFeatures(acc, bvpBandPassed, columns, columnNames)
-    addEdaFeatures(eda, columns, columnNames)
+    addBvpFeatures(bvp, band, columns, names)
+    addMotionFeatures(acc, band, columns, names)
+    addEdaFeatures(eda, columns, names)
 
-    return np.hstack(columns).astype(np.float32), columnNames
+    return np.hstack(columns).astype(np.float32), names
 
 
-def buildScalarFeaturesChunked(bvp, acc, eda, logRatePrior, chunkRows=8192, tag=""):
-    scalarChunks, columnNames = [], None
-    rowCount = len(bvp)
-    for start in range(0, rowCount, chunkRows):
-        stop = min(start + chunkRows, rowCount)
-        scalars, chunkColumnNames = buildScalarFeatures(bvp[start:stop], acc[start:stop], eda[start:stop], logRatePrior)
-        scalarChunks.append(scalars)
-        if columnNames is None:
-            columnNames = chunkColumnNames
-        del scalars
+def buildFeaturesChunked(bvp, acc, eda, prior, chunkRows=8192, tag=""):
+    chunks, names = [], None
+    n = len(bvp)
+    for start in range(0, n, chunkRows):
+        stop = min(start + chunkRows, n)
+        block, blockNames = buildFeatures(bvp[start:stop], acc[start:stop], eda[start:stop], prior)
+        chunks.append(block)
+        if names is None:
+            names = blockNames
+        del block
         gc.collect()
-        logProgress("  %s features %d/%d" % (tag, stop, rowCount))
-    return np.concatenate(scalarChunks), columnNames
+        log("  %s features %d/%d" % (tag, stop, n))
+    return np.concatenate(chunks), names
 
 
 bumpsPerScalar = 7 if fastMode else 9
-def fitScalarBumpKnots(scalars):
-    knotCentres = [np.percentile(scalars[:, column], np.linspace(2, 98, bumpsPerScalar)) for column in range(scalars.shape[1])]
-    knotWidths = [max((knots[-1] - knots[0]) / (bumpsPerScalar - 1), 1e-6) for knots in knotCentres]
-    return knotCentres, knotWidths
+def fitBumpKnots(features):
+    centres = [np.percentile(features[:, j], np.linspace(2, 98, bumpsPerScalar))
+               for j in range(features.shape[1])]
+    widths = [max((knots[-1] - knots[0]) / (bumpsPerScalar - 1), 1e-6) for knots in centres]
+    return centres, widths
 
 
-def expandScalarsToBumps(scalars, knotCentres, knotWidths):
-    return np.hstack([gaussianBumpBasis(scalars[:, column], knotCentres[column], knotWidths[column]) for column in range(scalars.shape[1])]).astype(np.float32)
+def expandToBumps(features, centres, widths):
+    return np.hstack([bumpBasis(features[:, j], centres[j], widths[j])
+                      for j in range(features.shape[1])]).astype(np.float32)
 
 
-def readSignalsCsv(path, chunkRows=20000):
+def readSignals(path, chunkRows=20000):
     bvpChunks, accChunks, edaChunks, targetChunks = [], [], [], []
-    rowCount = 0
+    total = 0
     for frame in pd.read_csv(path, chunksize=chunkRows, dtype=np.float32):
         target = frame["hr"].to_numpy(np.float32) if "hr" in frame.columns else None
         if target is not None:
@@ -368,172 +387,176 @@ def readSignalsCsv(path, chunkRows=20000):
         values = frame.to_numpy(np.float32)
         del frame
         if values.shape[1] != blocksPerWindow * valuesPerBlock:
-            raise ValueError("expected %d feature columns, got %d" % (blocksPerWindow * valuesPerBlock, values.shape[1]))
+            raise ValueError("expected %d feature columns, got %d"
+                             % (blocksPerWindow * valuesPerBlock, values.shape[1]))
         bvpChunks.append(values[:, bvpColumns])
-        accChunks.append(np.stack([values[:, accColumnsPerAxis[0]], values[:, accColumnsPerAxis[1]], values[:, accColumnsPerAxis[2]]], 1))
+        accChunks.append(np.stack([values[:, accColumns[0]], values[:, accColumns[1]],
+                                   values[:, accColumns[2]]], 1))
         edaChunks.append(values[:, edaColumns])
         if target is not None:
             targetChunks.append(target)
-        rowCount += len(values)
+        total += len(values)
         del values
         gc.collect()
-    logProgress("read %s: %d rows" % (path, rowCount))
+    log("read %s: %d rows" % (path, total))
     return (np.concatenate(bvpChunks), np.concatenate(accChunks), np.concatenate(edaChunks),
             np.concatenate(targetChunks).astype(np.float64) if targetChunks else None)
 
 
 ridgePenalties = 10.0 ** np.arange(-0.5, 6.01, 0.25)
-blockPenaltyPresets = ((0.1, 1.0),
+penaltyPresets = ((0.1, 1.0),
            (1.0, 1.0),
            (0.03, 0.3),
            (0.01, 30.0))
 if fastMode:
-    blockPenaltyPresets = blockPenaltyPresets[:2]
+    penaltyPresets = penaltyPresets[:2]
 
 
-def normalisedMeanAbsError(target, prediction):
-    return np.abs(target - prediction).sum() / np.abs(target - target.mean()).sum()
+def nmae(y, pred):
+    return np.abs(y - pred).sum() / np.abs(y - y.mean()).sum()
 
 
-def bestPenaltyOnRidgePath(gram, rhs, columnScale, validDesign, validTarget, targetMean):
-    eigenvalues, eigenvectors = np.linalg.eigh(gram * columnScale[None, :] * columnScale[:, None])
-    projectedRhs = eigenvectors.T @ (rhs * columnScale)
-    projectedValid = (validDesign * columnScale[None, :].astype(np.float32)) @ eigenvectors.astype(np.float32)
+def bestOnRidgePath(gram, rhs, scale, validX, validY, mean):
+    eigval, eigvec = np.linalg.eigh(gram * scale[None, :] * scale[:, None])
+    projRhs = eigvec.T @ (rhs * scale)
+    projX = (validX * scale[None, :].astype(np.float32)) @ eigvec.astype(np.float32)
     best = None
     for penalty in ridgePenalties:
-        scaledWeights = projectedRhs / (eigenvalues + penalty)
-        prediction = projectedValid @ scaledWeights.astype(np.float32) + targetMean
-        score = normalisedMeanAbsError(validTarget, prediction)
+        w = projRhs / (eigval + penalty)
+        pred = projX @ w.astype(np.float32) + mean
+        score = nmae(validY, pred)
         if best is None or score < best[0]:
-            best = (score, penalty, (eigenvectors @ scaledWeights) * columnScale)
+            best = (score, penalty, (eigvec @ w) * scale)
     return best
 
 
-def normalEquations(design, target):
-    return (design.T @ design).astype(np.float64), (design.T @ target).astype(np.float64)
+def normalEquations(X, y):
+    return (X.T @ X).astype(np.float64), (X.T @ y).astype(np.float64)
 
 
-def fitBlockRidgeThenIrls(design, target, blockIdOfColumn, blockCount):
-    rowCount = len(design)
-    splitIndex = int(rowCount * 0.75)
-    splitTargetMean = target[:splitIndex].mean()
-    logProgress("  gram (internal split)")
-    trainPart = design[:splitIndex]
-    gram, rhs = normalEquations(trainPart, (target[:splitIndex] - splitTargetMean).astype(np.float32))
-    del trainPart
+def fitBlockRidge(X, y, blockOf, blocks):
+    n = len(X)
+    cut = int(n * 0.75)
+    splitMean = y[:cut].mean()
+    log("  gram (internal split)")
+    head = X[:cut]
+    gram, rhs = normalEquations(head, (y[:cut] - splitMean).astype(np.float32))
+    del head
     gc.collect()
-    validDesign, validTarget = design[splitIndex:], target[splitIndex:]
+    validX, validY = X[cut:], y[cut:]
     best = None
-    for presetIndex, preset in enumerate(blockPenaltyPresets):
-        multipliers = np.asarray(preset, np.float64)[:blockCount]
-        columnScale = (1.0 / np.sqrt(multipliers))[blockIdOfColumn]              
-        score, penalty, weights = bestPenaltyOnRidgePath(gram, rhs, columnScale, validDesign, validTarget, splitTargetMean)
-        logProgress("    preset %d  internal NMAE %.4f (alpha=%.3g)" % (presetIndex, score, penalty))
+    for i, preset in enumerate(penaltyPresets):
+        mult = np.asarray(preset, np.float64)[:blocks]
+        scale = (1.0 / np.sqrt(mult))[blockOf]
+        score, penalty, w = bestOnRidgePath(gram, rhs, scale, validX, validY, splitMean)
+        log("    preset %d  internal NMAE %.4f (alpha=%.3g)" % (i, score, penalty))
         if best is None or score < best[0]:
             best = (score, penalty, preset)
-    del gram, rhs, validDesign
+    del gram, rhs, validX
     gc.collect()
-    logProgress("  best preset %s alpha %.3g internal NMAE %.4f" % (best[2], best[1], best[0]))
+    log("  best preset %s alpha %.3g internal NMAE %.4f" % (best[2], best[1], best[0]))
 
-    multipliers = np.asarray(best[2], np.float64)[:blockCount]
-    columnScale = (1.0 / np.sqrt(multipliers))[blockIdOfColumn]
+    mult = np.asarray(best[2], np.float64)[:blocks]
+    scale = (1.0 / np.sqrt(mult))[blockOf]
     penalty = best[1]
-    targetMean = target.mean()
-    centredTarget = (target - targetMean).astype(np.float32)
-    scaledDesign = (design * columnScale[None, :].astype(np.float32))
-    gram, rhs = normalEquations(scaledDesign, centredTarget)
-    columnCount = gram.shape[0]
-    weights = np.linalg.solve(gram + penalty * np.eye(columnCount), rhs)
-    logProgress("  L2 fit done")
+    mean = y.mean()
+    centred = (y - mean).astype(np.float32)
+    Xs = (X * scale[None, :].astype(np.float32))
+    gram, rhs = normalEquations(Xs, centred)
+    p = gram.shape[0]
+    w = np.linalg.solve(gram + penalty * np.eye(p), rhs)
+    log("  L2 fit done")
 
-    bestWeights, bestScore = weights, normalisedMeanAbsError(target[splitIndex:], scaledDesign[splitIndex:] @ weights.astype(np.float32) + targetMean)
-    for iteration in range(3):
-        residual = scaledDesign @ weights.astype(np.float32) - centredTarget
-        huberFloor = np.float32(1.345 * np.median(np.abs(residual - np.median(residual))) + 1e-3)
-        irlsWeights = np.sqrt(1.0 / np.maximum(np.abs(residual), huberFloor)).astype(np.float32)
-        reweightedDesign = scaledDesign * irlsWeights[:, None]
-        reweightedGram, reweightedRhs = normalEquations(reweightedDesign, centredTarget * irlsWeights)
-        del reweightedDesign
+    bestW, bestScore = w, nmae(y[cut:], Xs[cut:] @ w.astype(np.float32) + mean)
+    for it in range(3):
+        resid = Xs @ w.astype(np.float32) - centred
+        floor = np.float32(1.345 * np.median(np.abs(resid - np.median(resid))) + 1e-3)
+        sqrtW = np.sqrt(1.0 / np.maximum(np.abs(resid), floor)).astype(np.float32)
+        Xw = Xs * sqrtW[:, None]
+        gramW, rhsW = normalEquations(Xw, centred * sqrtW)
+        del Xw
         gc.collect()
-        weights = np.linalg.solve(reweightedGram + penalty * float((irlsWeights ** 2).mean()) * np.eye(columnCount), reweightedRhs)
-        score = normalisedMeanAbsError(target[splitIndex:], scaledDesign[splitIndex:] @ weights.astype(np.float32) + targetMean)
-        logProgress("    irls %d internal NMAE %.4f" % (iteration, score))
+        w = np.linalg.solve(gramW + penalty * float((sqrtW ** 2).mean()) * np.eye(p), rhsW)
+        score = nmae(y[cut:], Xs[cut:] @ w.astype(np.float32) + mean)
+        log("    irls %d internal NMAE %.4f" % (it, score))
         if score < bestScore:
-            bestScore, bestWeights = score, weights
-        del reweightedGram, reweightedRhs
+            bestScore, bestW = score, w
+        del gramW, rhsW
         gc.collect()
-    del scaledDesign
+    del Xs
     gc.collect()
-    return bestWeights * columnScale, targetMean
+    return bestW * scale, mean
 
 
 def main():
     if len(sys.argv) != 4:
         sys.stderr.write("usage: part_c_pruned.py train.csv test.csv predictions.txt\n")
         return 2
-    trainPath, testPath, predictionsPath = sys.argv[1:4]
+    trainPath, testPath, outPath = sys.argv[1:4]
 
-    bvp, acc, eda, trainTarget = readSignalsCsv(trainPath)
-    if trainTarget is None:
+    bvp, acc, eda, trainY = readSignals(trainPath)
+    if trainY is None:
         raise ValueError("train.csv must contain an 'hr' column")
 
-    histogram, _ = np.histogram(trainTarget, bins=np.append(candidateBpm - 0.25, candidateBpm[-1] + 0.25), density=True)
-    smoothingWindow = np.hanning(21)
-    smoothedPrior = np.convolve(histogram, smoothingWindow / smoothingWindow.sum(), mode="same") + 1e-6
-    logRatePrior = logSafe(smoothedPrior / smoothedPrior.sum())[None, :].astype(np.float32)
+    hist, _ = np.histogram(trainY, bins=np.append(candidateBpm - 0.25, candidateBpm[-1] + 0.25),
+                           density=True)
+    window = np.hanning(21)
+    prior = np.convolve(hist, window / window.sum(), mode="same") + 1e-6
+    logPrior = logSafe(prior / prior.sum())[None, :].astype(np.float32)
 
-    trainScalars, columnNames = buildScalarFeaturesChunked(bvp, acc, eda, logRatePrior, tag="train")
+    trainFeatures, names = buildFeaturesChunked(bvp, acc, eda, logPrior, tag="train")
     del bvp, acc, eda
     gc.collect()
-    logProgress("train scalars %s" % (trainScalars.shape,))
+    log("train scalars %s" % (trainFeatures.shape,))
 
-    bvp, acc, eda, _ = readSignalsCsv(testPath)
-    testRows = len(bvp)
-    testScalars, _ = buildScalarFeaturesChunked(bvp, acc, eda, logRatePrior, tag="test")
+    bvp, acc, eda, _ = readSignals(testPath)
+    testCount = len(bvp)
+    testFeatures, _ = buildFeaturesChunked(bvp, acc, eda, logPrior, tag="test")
     del bvp, acc, eda
     gc.collect()
 
-    knotCentres, knotWidths = fitScalarBumpKnots(trainScalars)
+    centres, widths = fitBumpKnots(trainFeatures)
 
-    def buildDesign(scalars):
-        return [scalars, expandScalarsToBumps(scalars, knotCentres, knotWidths)]
+    def buildDesign(features):
+        return [features, expandToBumps(features, centres, widths)]
 
-    trainParts = buildDesign(trainScalars)
-    del trainScalars
+    trainParts = buildDesign(trainFeatures)
+    del trainFeatures
     gc.collect()
     blockSizes = [part.shape[1] for part in trainParts]
-    blockIdOfColumn = np.concatenate([[i] * s for i, s in enumerate(blockSizes)])
-    trainDesign = np.hstack(trainParts)
+    blockOf = np.concatenate([[i] * s for i, s in enumerate(blockSizes)])
+    trainX = np.hstack(trainParts)
     del trainParts
     gc.collect()
-    logProgress("design matrix %s  block sizes %s" % (trainDesign.shape, blockSizes))
+    log("design matrix %s  block sizes %s" % (trainX.shape, blockSizes))
 
-    designMean = trainDesign.mean(0)
-    designStd = trainDesign.std(0) + np.float32(1e-8)
-    trainDesign = ((trainDesign - designMean) / designStd).astype(np.float32)
+    mean = trainX.mean(0)
+    std = trainX.std(0) + np.float32(1e-8)
+    trainX = ((trainX - mean) / std).astype(np.float32)
 
-    weights, targetMean = fitBlockRidgeThenIrls(trainDesign, trainTarget, blockIdOfColumn, len(blockSizes))
-    del trainDesign
+    w, intercept = fitBlockRidge(trainX, trainY, blockOf, len(blockSizes))
+    del trainX
     gc.collect()
 
-    testParts = buildDesign(testScalars)
-    del testScalars
+    testParts = buildDesign(testFeatures)
+    del testFeatures
     gc.collect()
-    testDesign = np.hstack(testParts)
+    testX = np.hstack(testParts)
     del testParts
     gc.collect()
-    testDesign = ((testDesign - designMean) / designStd).astype(np.float32)
-    prediction = (testDesign @ weights.astype(np.float32) + targetMean).astype(np.float64)
-    del testDesign
+    testX = ((testX - mean) / std).astype(np.float32)
+    pred = (testX @ w.astype(np.float32) + intercept).astype(np.float64)
+    del testX
     gc.collect()
 
-    lowerBound, upperBound = trainTarget.min() - 15.0, trainTarget.max() + 15.0
-    prediction = np.clip(np.nan_to_num(prediction, nan=targetMean, posinf=upperBound, neginf=lowerBound), max(lowerBound, 25.0), min(upperBound, 230.0))
-    assert len(prediction) == testRows, "prediction count mismatch"
-    with open(predictionsPath, "w") as handle:
-        handle.write("\n".join("%.6f" % value for value in prediction))
-        handle.write("\n")
-    logProgress("wrote %d predictions to %s" % (testRows, predictionsPath))
+    lo, hi = trainY.min() - 15.0, trainY.max() + 15.0
+    pred = np.clip(np.nan_to_num(pred, nan=intercept, posinf=hi, neginf=lo),
+                   max(lo, 25.0), min(hi, 230.0))
+    assert len(pred) == testCount, "prediction count mismatch"
+    with open(outPath, "w") as f:
+        f.write("\n".join("%.6f" % v for v in pred))
+        f.write("\n")
+    log("wrote %d predictions to %s" % (testCount, outPath))
     return 0
 
 
