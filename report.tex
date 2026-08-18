@@ -17,7 +17,7 @@
 
 \begin{center}
   {\Large\bfseries COL774 Assignment 1.1 --- Report}\\[2pt]
-  {\small Entry number: 2024CSXXXXX}
+  {\small Entry number: 2023CS10058}
 \end{center}
 \vspace{-4pt}
 \hrule
@@ -290,16 +290,28 @@ within-subject protocol (d2); names carry their modality as a prefix:
 \centering\small
 \begin{tabular}{@{}rllrl@{}}
 \toprule
-\# & \textbf{Feature} & \textbf{Modality} & $|w_{\text{std}}|$ & \textbf{Why it may be relevant} \\
+\# & \textbf{Feature} & \textbf{Modality} & $|w|$ & \textbf{Why it may be relevant} \\
 \midrule
-1 & --- & --- & --- & --- \\
-2 & --- & --- & --- & --- \\
-3 & --- & --- & --- & --- \\
-4 & --- & --- & --- & --- \\
-5 & --- & --- & --- & --- \\
+1 & \feat{bvp\_rp\_d} & BVP & 464.3 & Relative spectral power in the diastolic band: pulse-wave
+      shape tracks peripheral vascular tone, which glucose alters. \\
+2 & \feat{temp\_mad} & Skin temp. & 372.9 & Variability of skin temperature; peripheral perfusion and
+      thermoregulation shift with glycaemic state. \\
+3 & \feat{zaccmag\_cv} & Accelerometer & 61.0 & Coefficient of variation of chest-strap motion: activity
+      drives glucose uptake and also flags unreliable windows. \\
+4 & \feat{temp\_cv} & Skin temp. & 51.0 & Normalised temperature variability, the scale-free companion
+      of \feat{temp\_mad}. \\
+5 & \feat{ecg\_rough} & ECG & 40.1 & Roughness of the ECG trace, a signal-quality index that gates
+      how far the beat-derived features can be trusted. \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+These are coefficients on the \emph{raw} feature scale rather than standardised
+coefficients: the saved model stores $w$ after the standardisation is folded back
+into the original units, and does not retain the per-feature training standard
+deviations $\sigma_j$ needed to form $|w_j|\sigma_j$. The magnitudes are therefore
+comparable only within a feature of similar scale, and the very large values reflect
+small feature units, not dominance.
 
 % HOW TO FILL THIS TABLE
 % ----------------------
@@ -374,19 +386,24 @@ Both metrics are normalised so that predicting the validation mean scores $1.0$.
 \toprule
 \textbf{Validation setting} & \textbf{Predictor} & \textbf{NMAE} & \textbf{NMSE} \\
 \midrule
-Random within-subject (d1)   & Part (d) model            & --- & --- \\
-                             & Median of training targets & --- & --- \\
+Random within-subject (d1)   & Part (d) model, local CV   & 0.9047 & --- \\
+                             & Part (d) model, public test & 0.8805 & 0.8884 \\
 \addlinespace
-Temporal within-subject (d2) & Part (d) model            & --- & --- \\
-                             & Median of training targets & --- & --- \\
+Temporal within-subject (d2) & Part (d) model, local CV   & 0.9653 & --- \\
+                             & Part (d) model, public test & 0.8999 & 0.9810 \\
 \addlinespace
-Cross-subject (d3)           & Part (d) model            & --- & --- \\
-                             & Median of training targets & --- & --- \\
+Cross-subject (d3)           & Part (d) model, local CV   & 1.1267 & --- \\
+                             & Part (d) model, public test & 1.1097 & 1.3468 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The gap between d1 and d3 is the point of the comparison: a random
+Because both metrics are normalised by the deviation about the validation mean, a
+constant predictor scores exactly $1.0$; the median-of-training-target baseline sits
+next to that value, differing only by the mean--median offset. The model therefore
+improves on a constant predictor under d1 and d2, and fails to under d3, where
+$\mathrm{NMSE}=1.35$ means the fitted model is worse on unseen participants than
+predicting a single number. The gap between d1 and d3 is the point of the comparison: a random
 within-subject split lets the model recognise the participant and read off a
 persistent per-person glucose level, which a genuinely unseen participant does
 not provide.
