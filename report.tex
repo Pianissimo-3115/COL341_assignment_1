@@ -344,12 +344,21 @@ validation mean scores $1.0$.
 \toprule
 \textbf{Predictor} & \textbf{NMAE} & \textbf{NMSE} \\
 \midrule
-Part (c) model                  & 0.6426 & --- \\
-Median of training targets      & 0.9938 & 1.0192 \\
+Part (c) model, local validation    & 0.6426 & --- \\
+Median of training targets          & 0.9938 & 1.0192 \\
+\midrule
+Part (c) model, public test set     & \textbf{0.6244} & \textbf{0.4806} \\
 \bottomrule
 \end{tabular}
 \end{table}
- Section "4. Comparison with the median baseline", after the
+
+The last row is the held-out public test score reported by the supplied evaluation
+script, which is the figure the model is graded on; the two rows above it are the
+local comparison the report item asks for, where model and baseline see identical
+examples. The baseline sits near $1.0$ by construction, so the model recovers roughly
+a third of the absolute error and half the squared error that predicting a constant
+would incur.
+
 % ----------------------------------------------------------------------
 
 \textbf{Part (d).} The baseline predicts the median of the training glucose
