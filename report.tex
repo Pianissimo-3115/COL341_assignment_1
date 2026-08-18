@@ -274,23 +274,15 @@ none reaches the magnitude of a raw scalar.
 
 \begin{table}[h]
 \centering\small
-\begin{tabular}{@{}rllrl@{}}
+\begin{tabular}{@{}rllr p{5.4cm}@{}}
 \toprule
 \# & \textbf{Feature} & \textbf{Modality} & $|w_{\text{std}}|$ & \textbf{Why it may be relevant} \\
 \midrule
-1 & \feat{a\_magsd} & Accelerometer & 8.33 & Standard deviation of acceleration magnitude:
-      activity level is a strong prior on heart rate, and motion is also what corrupts
-      the BVP trace. \\
-2 & \feat{t\_ldiff} & BVP & 5.93 & Log mean absolute first difference of the band-passed
-      BVP --- a direct measure of how fast the waveform is moving, which rises with
-      pulse rate. \\
-3 & \feat{t\_lmad} & BVP & 5.39 & Log mean absolute deviation of the BVP; with
-      \feat{t\_ldiff} it forms a rate-versus-amplitude contrast that separates fast
-      low-amplitude pulses from slow large ones. \\
-4 & \feat{t\_lamp} & BVP & 3.90 & Log pulse amplitude. Large amplitude signals motion
-      inflating the E4's output rather than a strong pulse, so it enters negatively. \\
-5 & \feat{t\_lrange} & BVP & 3.28 & Log peak-to-peak range of the unfiltered BVP, a
-      companion signal-quality index to the two amplitude terms above. \\
+1 & \feat{a\_magsd} & Accelerometer & 8.33 & Activity level, a strong prior on heart rate \\
+2 & \feat{t\_ldiff} & BVP & 5.93 & Waveform speed; rises with pulse rate \\
+3 & \feat{t\_lmad} & BVP & 5.39 & Pulse amplitude; contrasts with \feat{t\_ldiff} \\
+4 & \feat{t\_lamp} & BVP & 3.90 & Large amplitude means motion, not a strong pulse \\
+5 & \feat{t\_lrange} & BVP & 3.28 & Peak-to-peak range; signal-quality index \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -309,20 +301,15 @@ similar units. The ranking is for the temporal within-subject protocol (d2); nam
 
 \begin{table}[h]
 \centering\small
-\begin{tabular}{@{}rllrl@{}}
+\begin{tabular}{@{}rllr p{5.4cm}@{}}
 \toprule
 \# & \textbf{Feature} & \textbf{Modality} & $|w|$ & \textbf{Why it may be relevant} \\
 \midrule
-1 & \feat{bvp\_rp\_d} & BVP & 464.3 & Relative spectral power in the diastolic band: pulse-wave
-      shape tracks peripheral vascular tone, which glucose alters. \\
-2 & \feat{temp\_mad} & Skin temp. & 372.9 & Variability of skin temperature; peripheral perfusion and
-      thermoregulation shift with glycaemic state. \\
-3 & \feat{zaccmag\_cv} & Accelerometer & 61.0 & Coefficient of variation of chest-strap motion: activity
-      drives glucose uptake and also flags unreliable windows. \\
-4 & \feat{temp\_cv} & Skin temp. & 51.0 & Normalised temperature variability, the scale-free companion
-      of \feat{temp\_mad}. \\
-5 & \feat{ecg\_rough} & ECG & 40.1 & Roughness of the ECG trace, a signal-quality index that gates
-      how far the beat-derived features can be trusted. \\
+1 & \feat{bvp\_rp\_d} & BVP & 464.3 & Pulse-wave shape tracks vascular tone \\
+2 & \feat{temp\_mad} & Skin temp. & 372.9 & Temperature variability; perfusion shifts \\
+3 & \feat{zaccmag\_cv} & Accelerometer & 61.0 & Motion variability; activity drives uptake \\
+4 & \feat{temp\_cv} & Skin temp. & 51.0 & Scale-free companion to \feat{temp\_mad} \\
+5 & \feat{ecg\_rough} & ECG & 40.1 & ECG signal-quality index \\
 \bottomrule
 \end{tabular}
 \end{table}
