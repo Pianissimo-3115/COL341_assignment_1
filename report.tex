@@ -263,34 +263,45 @@ E4 EDA (4\,Hz, $\mu$S); Zephyr ECG (250\,Hz, mV); and the E4 heart-rate stream
 
 \section*{3.\quad Top five features}
 
-Importance is the absolute standardised regression coefficient. Every column is
-standardised before fitting, so $|w|$ is directly comparable across features and needs no
-rescaling. Names carry their modality as a prefix: \feat{t\_} BVP time domain, \feat{a\_}
-accelerometer, \feat{e\_} EDA, \feat{x\_} cross-estimator, \feat{sp\_}/\feat{sg\_}
-harmonic probes, and a surface tag (\feat{S}, \feat{P}, \feat{AR}, \feat{G2}, \feat{G25},
-\feat{G5}, \feat{R}, \feat{AC}) otherwise.
+\textbf{Part (c).} Importance is the absolute standardised regression coefficient.
+Every column is standardised before fitting, so $|w|$ is directly comparable across
+features and needs no rescaling. Names carry their modality as a prefix: \feat{t\_}
+BVP time domain, \feat{a\_} accelerometer, \feat{e\_} EDA, \feat{x\_}
+cross-estimator, and a surface tag (\feat{S}, \feat{P}, \feat{AR}, \feat{G2},
+\feat{G25}, \feat{G5}, \feat{R}) otherwise. Every one of the top five is a scalar
+feature: the spline columns each carry a small share of one feature's response, so
+none reaches the magnitude of a raw scalar.
 
 \begin{table}[h]
 \centering\small
-\begin{tabular}{@{}rlrl@{}}
+\begin{tabular}{@{}rllrl@{}}
 \toprule
-\# & \textbf{Feature (modality)} & $|w_{\text{std}}|$ & \textbf{Why it may be relevant} \\
+\# & \textbf{Feature} & \textbf{Modality} & $|w_{\text{std}}|$ & \textbf{Why it may be relevant} \\
 \midrule
-1 & --- & --- & --- \\
-2 & --- & --- & --- \\
-3 & --- & --- & --- \\
-4 & --- & --- & --- \\
-5 & --- & --- & --- \\
+1 & \feat{a\_magsd} & Accelerometer & 8.33 & Standard deviation of acceleration magnitude:
+      activity level is a strong prior on heart rate, and motion is also what corrupts
+      the BVP trace. \\
+2 & \feat{t\_ldiff} & BVP & 5.93 & Log mean absolute first difference of the band-passed
+      BVP --- a direct measure of how fast the waveform is moving, which rises with
+      pulse rate. \\
+3 & \feat{t\_lmad} & BVP & 5.39 & Log mean absolute deviation of the BVP; with
+      \feat{t\_ldiff} it forms a rate-versus-amplitude contrast that separates fast
+      low-amplitude pulses from slow large ones. \\
+4 & \feat{t\_lamp} & BVP & 3.90 & Log pulse amplitude. Large amplitude signals motion
+      inflating the E4's output rather than a strong pulse, so it enters negatively. \\
+5 & \feat{t\_lrange} & BVP & 3.28 & Log peak-to-peak range of the unfiltered BVP, a
+      companion signal-quality index to the two amplitude terms above. \\
 \bottomrule
 \end{tabular}
 \end{table}
+
 % ----------------------------------------------------------------------
 
 \textbf{Part (d).} The stored coefficients act on the raw (winsorised) feature
-scale, so importance is $|w_j|\,\sigma_j$ with $\sigma_j$ the training standard
-deviation of feature $j$ --- the coefficient the model would have had if the
-columns were standardised. The ranking below is for the temporal
-within-subject protocol (d2); names carry their modality as a prefix:
+scale and the saved model does not retain the per-feature training standard
+deviations, so the ranking below is by raw $|w|$ rather than by
+$|w_j|\,\sigma_j$; magnitudes are therefore comparable only between features of
+similar units. The ranking is for the temporal within-subject protocol (d2); names carry their modality as a prefix:
 \feat{ecg\_} ECG, \feat{ppg\_}/\feat{bvp\_} BVP, \feat{eda\_} EDA,
 \feat{temp\_} skin temperature, \feat{e4hr\_} device heart rate,
 \feat{resp\_} respiration, \feat{e4acc\_}/\feat{zacc\_} accelerometer,
